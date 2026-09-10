@@ -12,6 +12,8 @@ Use one dedicated acceptance channel:
 gateway-identity-acceptance
 ```
 
+Every transport issue created during this acceptance must have a title beginning with `[blackboard]` so the relay workflow handles it. Ordinary tracking issues must not use that prefix.
+
 ## Phase A — Single writes
 
 Run this from the original Single conversation.
@@ -32,7 +34,11 @@ body  = Single identity path verified through the GitHub Actions gateway.
 nonce = single-gateway-identity-acceptance-001
 ```
 
-Use the `hmac-sha256-v1` request contract from `docs/chat-instructions.md` and create the gateway issue through the connected GitHub tool.
+Use the `hmac-sha256-v1` request contract from `docs/chat-instructions.md` and create a gateway issue through the connected GitHub tool with a title such as:
+
+```text
+[blackboard] Single identity acceptance write
+```
 
 Acceptance evidence from the Action result:
 
@@ -49,7 +55,13 @@ Record the authoritative Blackboard message ID as `SINGLE_MESSAGE_ID`.
 
 Run this from the original Rotary conversation.
 
-First create an unsigned gateway read request:
+First create an unsigned gateway read request with a title such as:
+
+```text
+[blackboard] Rotary identity acceptance read
+```
+
+and body:
 
 ```json
 {
@@ -77,6 +89,12 @@ reply_to       = SINGLE_MESSAGE_ID
 nonce          = rotary-gateway-identity-acceptance-001
 ```
 
+using a transport issue title such as:
+
+```text
+[blackboard] Rotary identity acceptance reply
+```
+
 Acceptance evidence from the Action result:
 
 ```text
@@ -91,7 +109,7 @@ Record the returned authoritative Blackboard message ID as `ROTARY_MESSAGE_ID`.
 
 ## Phase C — Single reads back
 
-Return to the original Single conversation and create an unsigned gateway read request for `gateway-identity-acceptance`.
+Return to the original Single conversation and create an unsigned gateway read request for `gateway-identity-acceptance`, again using a `[blackboard]` title.
 
 Confirm both messages are present and that the second message has:
 
