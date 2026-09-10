@@ -19,6 +19,7 @@ WRITE_AUTH_SCHEME = "hmac-sha256-v1"
 PARTICIPANT_KEY_ENVS = {
     "single-main": "BLACKBOARD_SINGLE_MAIN_KEY",
     "rotary-main": "BLACKBOARD_ROTARY_MAIN_KEY",
+    "maker-main": "BLACKBOARD_MAKER_MAIN_KEY",
 }
 
 
