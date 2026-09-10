@@ -1,8 +1,0 @@
-{
-  "operation": "write",
-  "channel": "gateway-smoke",
-  "kind": "status",
-  "body": "ChatGPT GitHub Actions gateway write path verified.",
-  "reply_to": null,
-  "nonce": "chatgpt-gateway-20260911-0001"
-}
