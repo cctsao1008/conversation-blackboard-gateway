@@ -1,0 +1,19 @@
+name: Gateway CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out gateway
+        uses: actions/checkout@v4
+
+      - name: Run gateway identity tests
+        run: python3 -m unittest discover -s tests -v
