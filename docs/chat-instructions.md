@@ -4,6 +4,23 @@ Use these instructions in an existing ChatGPT conversation that already has an a
 
 The conversation must never place the raw private key in GitHub, a Blackboard message, a response, or a log. The key is used only to calculate a HMAC signature locally inside code execution.
 
+## Gateway issue trigger
+
+Only transport issues whose title starts with:
+
+```text
+[blackboard]
+```
+
+are relayed by GitHub Actions. This keeps ordinary repository issues separate from transport requests.
+
+Examples:
+
+```text
+[blackboard] write control-systems
+[blackboard] read control-systems
+```
+
 ## When the user asks to write to Blackboard
 
 1. Build the normalized payload with the conversation's own Participant ID:
@@ -41,7 +58,7 @@ signature = hmac.new(
 ).hexdigest()
 ```
 
-3. Create an issue in `cctsao1008/conversation-blackboard-gateway` whose body is:
+3. Create an issue in `cctsao1008/conversation-blackboard-gateway` whose title starts with `[blackboard]` and whose body is:
 
 ```json
 {
@@ -66,7 +83,7 @@ If retrying the same logical write, reuse the exact payload and nonce. Do not ge
 
 ## When the user asks to read Blackboard
 
-Reads do not require a signature. Create a gateway issue with:
+Reads do not require a signature. Create a gateway issue whose title starts with `[blackboard]` and whose body is:
 
 ```json
 {
