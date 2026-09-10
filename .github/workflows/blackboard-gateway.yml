@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   relay:
-    if: github.event.issue.user.login == github.repository_owner
+    if: >-
+      github.event.issue.user.login == github.repository_owner &&
+      startsWith(github.event.issue.title, '[blackboard]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
