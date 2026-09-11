@@ -20,6 +20,7 @@ PARTICIPANT_KEY_ENVS = {
     "single-main": "BLACKBOARD_SINGLE_MAIN_KEY",
     "rotary-main": "BLACKBOARD_ROTARY_MAIN_KEY",
     "maker-main": "BLACKBOARD_MAKER_MAIN_KEY",
+    "claude-main": "BLACKBOARD_CLAUDE_MAIN_KEY",
 }
 
 
