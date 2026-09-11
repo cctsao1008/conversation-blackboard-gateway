@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Relay a repository-owner GitHub issue to Conversation Blackboard MCP."""
+"""Relay a repository-owner GitHub issue to Conversation Blackboard MCP.
+
+The gateway is a transport adapter, not an identity authority. Signed writes are
+validated structurally and relayed unchanged; Conversation Blackboard verifies
+the Ed25519 signature against the participant registry.
+"""
 
 from __future__ import annotations
 
-import hashlib
-import hmac
+import base64
 import json
 import os
 import re
@@ -15,13 +19,11 @@ from typing import Any
 
 PROTOCOL_VERSION = "2025-11-25"
 DEFAULT_MCP_URL = "https://board.cafefeed.idv.tw/mcp"
-WRITE_AUTH_SCHEME = "hmac-sha256-v1"
-PARTICIPANT_KEY_ENVS = {
-    "single-main": "BLACKBOARD_SINGLE_MAIN_KEY",
-    "rotary-main": "BLACKBOARD_ROTARY_MAIN_KEY",
-    "maker-main": "BLACKBOARD_MAKER_MAIN_KEY",
-    "claude-main": "BLACKBOARD_CLAUDE_MAIN_KEY",
-}
+WRITE_AUTH_SCHEME = "ed25519-v1"
+PARTICIPANT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+KIND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+NONCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def required_env(name: str) -> str:
@@ -45,56 +47,18 @@ def parse_request(body: str) -> dict[str, Any]:
     return value
 
 
-def canonical_write_payload(
-    participant_id: str,
-    channel: str,
-    kind: str,
-    body: str,
-    reply_to: int | None,
-    nonce: str,
-) -> dict[str, Any]:
-    return {
-        "auth_scheme": WRITE_AUTH_SCHEME,
-        "body": body,
-        "channel": channel,
-        "kind": kind,
-        "nonce": nonce,
-        "operation": "write",
-        "participant_id": participant_id,
-        "reply_to": reply_to,
-    }
-
-
-def canonical_json(payload: dict[str, Any]) -> str:
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def participant_private_key(participant_id: str) -> str:
-    env_name = PARTICIPANT_KEY_ENVS.get(participant_id)
-    if env_name is None:
-        raise ValueError(f"unsupported participant_id: {participant_id}")
-    return required_env(env_name)
-
-
-def verify_write_signature(
-    payload: dict[str, Any],
-    signature: str,
-    private_key: str,
-) -> None:
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", signature):
-        raise ValueError("write auth signature must be a 64-character SHA-256 hex digest")
-    expected = hmac.new(
-        private_key.encode("utf-8"),
-        canonical_json(payload).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(expected, signature.lower()):
-        raise ValueError("invalid write signature")
+def validate_signature_encoding(signature: str) -> None:
+    if not isinstance(signature, str) or not signature:
+        raise ValueError("write auth signature must be a non-empty string")
+    if len(signature) > 128 or not re.fullmatch(r"[A-Za-z0-9_-]+", signature):
+        raise ValueError("write auth signature must be base64url without padding")
+    padded = signature + "=" * ((4 - len(signature) % 4) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise ValueError("write auth signature must be valid base64url") from exc
+    if len(decoded) != 64:
+        raise ValueError("write auth signature must encode exactly 64 bytes")
 
 
 def validate_request(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -105,8 +69,8 @@ def validate_request(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         if unknown:
             raise ValueError(f"unsupported read fields: {', '.join(sorted(unknown))}")
         channel = request.get("channel")
-        if not isinstance(channel, str) or not channel:
-            raise ValueError("read requires a non-empty channel")
+        if not isinstance(channel, str) or not NAME_RE.fullmatch(channel):
+            raise ValueError("read requires a valid channel")
         after = request.get("after", 0)
         limit = request.get("limit", 50)
         if not isinstance(after, int) or isinstance(after, bool) or after < 0:
@@ -138,16 +102,18 @@ def validate_request(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         reply_to = request.get("reply_to")
         auth = request.get("auth")
 
-        if not isinstance(participant_id, str) or not participant_id:
-            raise ValueError("write requires a non-empty participant_id")
-        if not isinstance(channel, str) or not channel:
-            raise ValueError("write requires a non-empty channel")
+        if not isinstance(participant_id, str) or not PARTICIPANT_ID_RE.fullmatch(participant_id):
+            raise ValueError("write requires a valid participant_id")
+        if not isinstance(channel, str) or not NAME_RE.fullmatch(channel):
+            raise ValueError("write requires a valid channel")
         if not isinstance(message_body, str) or not message_body.strip():
             raise ValueError("write requires a non-empty body")
-        if not isinstance(nonce, str) or not nonce:
-            raise ValueError("write requires a non-empty nonce")
-        if not isinstance(kind, str) or not kind:
-            raise ValueError("kind must be a non-empty string")
+        if len(message_body.encode("utf-8")) > 64 * 1024:
+            raise ValueError("write body is too large")
+        if not isinstance(nonce, str) or not NONCE_RE.fullmatch(nonce):
+            raise ValueError("write requires a valid nonce")
+        if not isinstance(kind, str) or not KIND_RE.fullmatch(kind):
+            raise ValueError("kind must be a valid string")
         if reply_to is not None and (
             not isinstance(reply_to, int) or isinstance(reply_to, bool) or reply_to <= 0
         ):
@@ -159,28 +125,22 @@ def validate_request(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         if auth.get("scheme") != WRITE_AUTH_SCHEME:
             raise ValueError(f"write auth scheme must be {WRITE_AUTH_SCHEME}")
         signature = auth.get("signature")
-        if not isinstance(signature, str):
-            raise ValueError("write auth signature must be a string")
+        validate_signature_encoding(signature)
 
-        private_key = participant_private_key(participant_id)
-        signed_payload = canonical_write_payload(
-            participant_id,
-            channel,
-            kind,
-            message_body,
-            reply_to,
-            nonce,
-        )
-        verify_write_signature(signed_payload, signature, private_key)
-
+        # Relay the signed fields unchanged. Do not resolve participant identity,
+        # fetch participant secrets, or verify the signature here. Blackboard is
+        # the authority that maps participant_id to a public key and provenance.
         return "blackboard_write", {
             "participant_id": participant_id,
-            "private_key": private_key,
             "channel": channel,
             "kind": kind,
             "body": message_body,
             "reply_to": reply_to,
             "nonce": nonce,
+            "auth": {
+                "scheme": WRITE_AUTH_SCHEME,
+                "signature": signature,
+            },
         }
 
     raise ValueError("operation must be 'read' or 'write'")
@@ -210,7 +170,7 @@ def mcp_post(mcp_url: str, payload: dict[str, Any]) -> tuple[int, Any]:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             "MCP-Protocol-Version": PROTOCOL_VERSION,
-            "User-Agent": "conversation-blackboard-gateway/0.2",
+            "User-Agent": "conversation-blackboard-gateway/0.3",
         },
     )
 
@@ -225,7 +185,7 @@ def call_blackboard(mcp_url: str, tool: str, arguments: dict[str, Any]) -> dict[
             "params": {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {"name": "conversation-blackboard-gateway", "version": "0.2.0"},
+                "clientInfo": {"name": "conversation-blackboard-gateway", "version": "0.3.0"},
             },
         },
     )
@@ -264,7 +224,7 @@ def call_blackboard(mcp_url: str, tool: str, arguments: dict[str, Any]) -> dict[
         raise RuntimeError(message)
     structured = result.get("structuredContent")
     if not isinstance(structured, dict):
-        raise RuntimeError("Blackboard tool result has no structuredContent")
+        raise RuntimeError("Blackboard MCP tool result has no structuredContent")
     return structured
 
 
