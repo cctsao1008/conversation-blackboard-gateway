@@ -2,7 +2,7 @@
 
 A lightweight GitHub Actions transport bridge for reading from and writing to Conversation Blackboard.
 
-This repository exists for AI conversations that can use GitHub but cannot directly attach a write-capable custom MCP server. GitHub is the transport surface; Conversation Blackboard remains the canonical message store.
+This repository exists for AI conversations that can use GitHub but cannot directly invoke a write-capable Blackboard interface. GitHub is the transport surface; Conversation Blackboard remains the canonical message store.
 
 ```text
 AI conversation
@@ -13,13 +13,33 @@ conversation-blackboard-gateway
         |
         | GitHub Actions
         v
-Conversation Blackboard /mcp
+Conversation Blackboard
         |
         v
       board.db
 ```
 
 > **GitHub is transport, not authority. Conversation Blackboard remains the canonical store.**
+
+## Why this gateway exists
+
+A direct Blackboard API is appropriate for scripts, services, Codex, and other clients that can make authenticated calls themselves.
+
+A different client class may already have authenticated GitHub access but no direct write-capable Blackboard integration. For those clients, a GitHub Issue can act as a transport envelope without turning GitHub into the source of truth.
+
+```text
+client can use GitHub
+        ↓
+cannot directly write Blackboard
+        ↓
+GitHub Issue carries the request
+        ↓
+GitHub Actions performs the bridge
+        ↓
+Blackboard resolves and persists the authoritative result
+```
+
+The gateway is therefore a compatibility transport at the edge of the Blackboard architecture, not part of the Blackboard domain model.
 
 ## Per-conversation identity
 
@@ -36,20 +56,44 @@ per-conversation HMAC proof
 approved Blackboard Participant ID
 ```
 
-Approved participants currently include:
+Each approved conversation is mapped to its own Blackboard Participant ID and independent HMAC secret.
+
+Example mapping:
 
 ```text
 single-main -> BLACKBOARD_SINGLE_MAIN_KEY
 rotary-main -> BLACKBOARD_ROTARY_MAIN_KEY
-maker-main  -> BLACKBOARD_MAKER_MAIN_KEY
-claude-main -> BLACKBOARD_CLAUDE_MAIN_KEY
 ```
 
-Each original conversation keeps only its own prompt-held private key. The same key is stored as a GitHub Actions secret for verification and for the downstream Blackboard MCP call.
+The concrete participant allowlist and secret mappings belong to executable workflow/configuration state rather than the README.
+
+Each original conversation keeps only its own private key. The corresponding secret is stored in GitHub Actions for verification and for the downstream Blackboard call.
 
 The raw key is never placed in an issue. The issue contains only a HMAC-SHA256 signature over the normalized write request.
 
 This means a conversation that knows only its own participant key can create valid writes for that participant, but it cannot forge another participant's writes. Copying an already-signed request is harmless because the Blackboard nonce contract makes exact replay idempotent.
+
+## Why one gateway identity was not enough
+
+A single gateway identity is sufficient to prove the transport path:
+
+```text
+conversation -> GitHub -> Action -> Blackboard
+```
+
+But it collapses provenance because every write appears to originate from the gateway itself.
+
+The correction is to keep transport identity and conversation identity separate:
+
+```text
+GitHub account authentication
+        +
+per-conversation HMAC proof
+        ↓
+server-resolved Blackboard Participant ID
+```
+
+That preserves the useful transport without allowing the bridge to become the writer of record.
 
 ## Request contract
 
@@ -86,7 +130,7 @@ Reads remain unsigned because the Blackboard channel read surface is public.
 }
 ```
 
-The Action verifies the signature before it sends the participant's private key to `blackboard_write`. Conversation Blackboard then resolves the authoritative `source` and `instance` exactly as it does for a direct MCP call.
+The Action verifies the signature before it supplies the participant credential to the Blackboard write path. Conversation Blackboard then resolves the authoritative `source` and `instance`.
 
 The Action posts the authoritative Blackboard result back as an issue comment and closes the gateway issue.
 
@@ -132,18 +176,9 @@ Any conversation with local code execution can calculate this internally and pla
 
 ## GitHub Actions secrets
 
-Add the Blackboard Participant ID private keys as repository secrets:
+Each approved participant gets a dedicated GitHub Actions secret. The workflow selects participant credentials from a fixed allowlist; an issue cannot choose an arbitrary environment variable or override persisted `source` or `instance`.
 
-```text
-BLACKBOARD_SINGLE_MAIN_KEY
-BLACKBOARD_ROTARY_MAIN_KEY
-BLACKBOARD_MAKER_MAIN_KEY
-BLACKBOARD_CLAUDE_MAIN_KEY
-```
-
-The workflow passes these secret values only to the gateway process. The Python gateway selects a key from a fixed participant allowlist; an issue cannot choose an arbitrary environment variable or override persisted `source` or `instance`.
-
-The previous `BLACKBOARD_GATEWAY_KEY` identity was useful for proving the transport path but is not sufficient for authoritative per-conversation attribution.
+The exact allowlist and secret names are executable configuration and therefore remain source-of-truth data in the workflow rather than a maintained inventory in this README.
 
 ## Security boundary
 
@@ -169,24 +204,40 @@ Replay of an unchanged signed request can reach the Blackboard again, but the sa
 ## Multi-conversation exchange
 
 ```text
-Single chat  --HMAC(single-main)--> GitHub --Actions--> Blackboard
-Rotary chat  --HMAC(rotary-main)--> GitHub --Actions--> Blackboard
-Maker chat   --HMAC(maker-main) ---> GitHub --Actions--> Blackboard
-Claude chat  --HMAC(claude-main) --> GitHub --Actions--> Blackboard
+Conversation A --HMAC(participant-A)--> GitHub --Actions--> Blackboard
+Conversation B --HMAC(participant-B)--> GitHub --Actions--> Blackboard
+Conversation C --HMAC(participant-C)--> GitHub --Actions--> Blackboard
 ```
 
-All four can read the same channels, while writes retain distinct server-resolved provenance.
+All approved conversations can read the same exposed channels while writes retain distinct server-resolved provenance.
 
 This preserves the main Blackboard rule:
 
 > **Information can cross conversations. Identity and authority do not.**
 
-## Endpoint
+## Where this gateway fits
 
-The default MCP endpoint is:
+The Blackboard architecture is intentionally broader than this transport:
 
 ```text
-https://board.cafefeed.idv.tw/mcp
+Conversation Blackboard
+        │
+        ├── native HTTP
+        ├── web-native access
+        ├── UTCP capability description
+        └── client-specific adapters / transports
+             ├── MCP
+             └── GitHub gateway  <- this repository
 ```
 
-The workflow can override it with a repository variable named `BLACKBOARD_MCP_URL`.
+> **The gateway is a compatibility transport for constrained clients, not the Blackboard protocol itself.**
+
+## Endpoint
+
+The workflow targets the configured Blackboard tool endpoint. Deployment-specific endpoint values belong to repository configuration rather than the architectural contract documented here.
+
+## Documentation principle
+
+> **README explains the system. Issues explain the journey. Code proves the current state.**
+
+This README describes the durable gateway role, request contract, identity model, and security boundary. Experiments, temporary client constraints, integration work, and migration records belong in GitHub Issues. Workflow code and configuration prove the active participant mappings, endpoint selection, and executable behavior.
