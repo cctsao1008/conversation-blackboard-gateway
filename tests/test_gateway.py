@@ -1,8 +1,5 @@
-import hashlib
-import hmac
+import base64
 import importlib.util
-import json
-import os
 import pathlib
 import unittest
 
@@ -13,101 +10,78 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(gateway)
 
 
-class GatewayIdentityTests(unittest.TestCase):
-    def setUp(self):
-        self.single_key = "single-test-key"
-        self.rotary_key = "rotary-test-key"
-        self.maker_key = "maker-test-key"
-        self.claude_key = "claude-test-key"
-        os.environ["BLACKBOARD_SINGLE_MAIN_KEY"] = self.single_key
-        os.environ["BLACKBOARD_ROTARY_MAIN_KEY"] = self.rotary_key
-        os.environ["BLACKBOARD_MAKER_MAIN_KEY"] = self.maker_key
-        os.environ["BLACKBOARD_CLAUDE_MAIN_KEY"] = self.claude_key
+def test_signature(byte=0x11):
+    return base64.urlsafe_b64encode(bytes([byte]) * 64).rstrip(b"=").decode("ascii")
 
-    def tearDown(self):
-        os.environ.pop("BLACKBOARD_SINGLE_MAIN_KEY", None)
-        os.environ.pop("BLACKBOARD_ROTARY_MAIN_KEY", None)
-        os.environ.pop("BLACKBOARD_MAKER_MAIN_KEY", None)
-        os.environ.pop("BLACKBOARD_CLAUDE_MAIN_KEY", None)
 
-    def signed_request(self, participant_id, key, **overrides):
+class GatewayRelayTests(unittest.TestCase):
+    def signed_request(self, participant_id="single-main", **overrides):
         request = {
             "operation": "write",
             "participant_id": participant_id,
             "channel": "control-systems",
             "kind": "insight",
-            "body": "Signed gateway identity test.",
+            "body": "Signed gateway relay test.",
             "reply_to": None,
             "nonce": f"{participant_id}-001",
+            "auth": {
+                "scheme": gateway.WRITE_AUTH_SCHEME,
+                "signature": test_signature(),
+            },
         }
         request.update(overrides)
-        payload = gateway.canonical_write_payload(
-            request["participant_id"],
-            request["channel"],
-            request["kind"],
-            request["body"],
-            request["reply_to"],
-            request["nonce"],
-        )
-        canonical = gateway.canonical_json(payload)
-        signature = hmac.new(key.encode(), canonical.encode(), hashlib.sha256).hexdigest()
-        request["auth"] = {
-            "scheme": gateway.WRITE_AUTH_SCHEME,
-            "signature": signature,
-        }
         return request
 
-    def test_single_signature_selects_single_identity(self):
-        tool, arguments = gateway.validate_request(
-            self.signed_request("single-main", self.single_key)
-        )
+    def test_signed_envelope_is_relayed_without_private_key(self):
+        request = self.signed_request("single-main")
+        tool, arguments = gateway.validate_request(request)
         self.assertEqual(tool, "blackboard_write")
         self.assertEqual(arguments["participant_id"], "single-main")
-        self.assertEqual(arguments["private_key"], self.single_key)
+        self.assertNotIn("private_key", arguments)
+        self.assertEqual(arguments["channel"], request["channel"])
+        self.assertEqual(arguments["kind"], request["kind"])
+        self.assertEqual(arguments["body"], request["body"])
+        self.assertEqual(arguments["reply_to"], request["reply_to"])
+        self.assertEqual(arguments["nonce"], request["nonce"])
+        self.assertEqual(arguments["auth"], request["auth"])
 
-    def test_rotary_signature_selects_rotary_identity(self):
-        tool, arguments = gateway.validate_request(
-            self.signed_request("rotary-main", self.rotary_key)
-        )
+    def test_gateway_does_not_keep_participant_secret_registry(self):
+        self.assertFalse(hasattr(gateway, "PARTICIPANT_KEY_ENVS"))
+        self.assertFalse(hasattr(gateway, "participant_private_key"))
+        self.assertFalse(hasattr(gateway, "verify_write_signature"))
+
+    def test_gateway_does_not_authoritatively_whitelist_participants(self):
+        request = self.signed_request("future-agent-main")
+        tool, arguments = gateway.validate_request(request)
         self.assertEqual(tool, "blackboard_write")
-        self.assertEqual(arguments["participant_id"], "rotary-main")
-        self.assertEqual(arguments["private_key"], self.rotary_key)
+        self.assertEqual(arguments["participant_id"], "future-agent-main")
 
-    def test_maker_signature_selects_maker_identity(self):
-        tool, arguments = gateway.validate_request(
-            self.signed_request("maker-main", self.maker_key)
-        )
+    def test_signature_is_structurally_validated_but_not_verified(self):
+        request = self.signed_request()
+        request["body"] = "Payload may be tampered in transport; Blackboard must reject it."
+        tool, arguments = gateway.validate_request(request)
         self.assertEqual(tool, "blackboard_write")
-        self.assertEqual(arguments["participant_id"], "maker-main")
-        self.assertEqual(arguments["private_key"], self.maker_key)
+        self.assertEqual(arguments["body"], request["body"])
+        self.assertEqual(arguments["auth"], request["auth"])
 
-    def test_claude_signature_selects_claude_identity(self):
-        tool, arguments = gateway.validate_request(
-            self.signed_request("claude-main", self.claude_key)
-        )
-        self.assertEqual(tool, "blackboard_write")
-        self.assertEqual(arguments["participant_id"], "claude-main")
-        self.assertEqual(arguments["private_key"], self.claude_key)
+    def test_malformed_signature_is_rejected_at_transport_boundary(self):
+        cases = ["", "***", "abc", "A" * 129]
+        for signature in cases:
+            request = self.signed_request()
+            request["auth"] = {"scheme": gateway.WRITE_AUTH_SCHEME, "signature": signature}
+            with self.assertRaises(ValueError, msg=signature):
+                gateway.validate_request(request)
 
-    def test_single_key_cannot_forge_rotary_identity(self):
-        request = self.signed_request("rotary-main", self.single_key)
-        with self.assertRaisesRegex(ValueError, "invalid write signature"):
+    def test_wrong_signature_scheme_is_rejected(self):
+        request = self.signed_request()
+        request["auth"] = {"scheme": "hmac-sha256-v1", "signature": test_signature()}
+        with self.assertRaisesRegex(ValueError, "ed25519-v1"):
             gateway.validate_request(request)
 
-    def test_rotary_key_cannot_forge_maker_identity(self):
-        request = self.signed_request("maker-main", self.rotary_key)
-        with self.assertRaisesRegex(ValueError, "invalid write signature"):
-            gateway.validate_request(request)
-
-    def test_maker_key_cannot_forge_claude_identity(self):
-        request = self.signed_request("claude-main", self.maker_key)
-        with self.assertRaisesRegex(ValueError, "invalid write signature"):
-            gateway.validate_request(request)
-
-    def test_signature_binds_message_body(self):
-        request = self.signed_request("single-main", self.single_key)
-        request["body"] = "Tampered body."
-        with self.assertRaisesRegex(ValueError, "invalid write signature"):
+    def test_client_cannot_supply_private_key_field(self):
+        request = self.signed_request()
+        request["private_key"] = "must-not-cross-gateway"
+        with self.assertRaisesRegex(ValueError, "unsupported write fields"):
             gateway.validate_request(request)
 
     def test_read_remains_unsigned(self):
