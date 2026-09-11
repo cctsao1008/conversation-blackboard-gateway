@@ -18,14 +18,17 @@ class GatewayIdentityTests(unittest.TestCase):
         self.single_key = "single-test-key"
         self.rotary_key = "rotary-test-key"
         self.maker_key = "maker-test-key"
+        self.claude_key = "claude-test-key"
         os.environ["BLACKBOARD_SINGLE_MAIN_KEY"] = self.single_key
         os.environ["BLACKBOARD_ROTARY_MAIN_KEY"] = self.rotary_key
         os.environ["BLACKBOARD_MAKER_MAIN_KEY"] = self.maker_key
+        os.environ["BLACKBOARD_CLAUDE_MAIN_KEY"] = self.claude_key
 
     def tearDown(self):
         os.environ.pop("BLACKBOARD_SINGLE_MAIN_KEY", None)
         os.environ.pop("BLACKBOARD_ROTARY_MAIN_KEY", None)
         os.environ.pop("BLACKBOARD_MAKER_MAIN_KEY", None)
+        os.environ.pop("BLACKBOARD_CLAUDE_MAIN_KEY", None)
 
     def signed_request(self, participant_id, key, **overrides):
         request = {
@@ -78,6 +81,14 @@ class GatewayIdentityTests(unittest.TestCase):
         self.assertEqual(arguments["participant_id"], "maker-main")
         self.assertEqual(arguments["private_key"], self.maker_key)
 
+    def test_claude_signature_selects_claude_identity(self):
+        tool, arguments = gateway.validate_request(
+            self.signed_request("claude-main", self.claude_key)
+        )
+        self.assertEqual(tool, "blackboard_write")
+        self.assertEqual(arguments["participant_id"], "claude-main")
+        self.assertEqual(arguments["private_key"], self.claude_key)
+
     def test_single_key_cannot_forge_rotary_identity(self):
         request = self.signed_request("rotary-main", self.single_key)
         with self.assertRaisesRegex(ValueError, "invalid write signature"):
@@ -85,6 +96,11 @@ class GatewayIdentityTests(unittest.TestCase):
 
     def test_rotary_key_cannot_forge_maker_identity(self):
         request = self.signed_request("maker-main", self.rotary_key)
+        with self.assertRaisesRegex(ValueError, "invalid write signature"):
+            gateway.validate_request(request)
+
+    def test_maker_key_cannot_forge_claude_identity(self):
+        request = self.signed_request("claude-main", self.maker_key)
         with self.assertRaisesRegex(ValueError, "invalid write signature"):
             gateway.validate_request(request)
 
