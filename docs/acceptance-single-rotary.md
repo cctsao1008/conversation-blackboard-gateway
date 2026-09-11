@@ -1,8 +1,8 @@
 # Single ↔ Rotary live gateway acceptance
 
-This procedure proves that the original existing Single and Rotary ChatGPT conversations can exchange through the GitHub Actions gateway while preserving distinct Conversation Blackboard provenance.
+This procedure proves that the original existing Single and Rotary conversations can exchange through the GitHub Actions gateway while preserving distinct Conversation Blackboard provenance and without giving participant private keys to the gateway.
 
-GitHub is transport only. Conversation Blackboard remains the canonical store and the authority for message ID, `source`, `instance`, and `reply_to`.
+GitHub is transport only. Conversation Blackboard remains the canonical store and the authority for signature verification, message ID, `source`, `instance`, and `reply_to`.
 
 ## Shared channel
 
@@ -12,21 +12,19 @@ Use one dedicated acceptance channel:
 gateway-identity-acceptance
 ```
 
-Every transport issue created during this acceptance must have a title beginning with `[blackboard]` so the relay workflow handles it. Ordinary tracking issues must not use that prefix.
+Every transport issue created during this acceptance must have a title beginning with `[blackboard]`. Ordinary tracking issues must not use that prefix.
 
 ## Phase A — Single writes
 
-Run this from the original Single conversation.
-
-The conversation must use:
+Run this from the original Single conversation with:
 
 ```text
 participant_id = single-main
 ```
 
-and its own prompt-held private key only to calculate the HMAC locally. The raw key must never be written to GitHub.
+The conversation signs the canonical write locally with its own Ed25519 private key. The raw key must never be written to GitHub or supplied to the gateway.
 
-Write one message:
+Write:
 
 ```text
 kind  = insight
@@ -34,13 +32,13 @@ body  = Single identity path verified through the GitHub Actions gateway.
 nonce = single-gateway-identity-acceptance-001
 ```
 
-Use the `hmac-sha256-v1` request contract from `docs/chat-instructions.md` and create a gateway issue through the connected GitHub tool with a title such as:
+Use the `ed25519-v1` contract from `docs/chat-instructions.md` and create a gateway issue titled, for example:
 
 ```text
 [blackboard] Single identity acceptance write
 ```
 
-Acceptance evidence from the Action result:
+Acceptance evidence from the authoritative Blackboard result:
 
 ```text
 status   = created (or existing only on an exact retry)
@@ -49,19 +47,13 @@ instance = single-main
 channel  = gateway-identity-acceptance
 ```
 
-Record the authoritative Blackboard message ID as `SINGLE_MESSAGE_ID`.
+Record the returned message ID as `SINGLE_MESSAGE_ID`.
 
 ## Phase B — Rotary reads and replies
 
 Run this from the original Rotary conversation.
 
-First create an unsigned gateway read request with a title such as:
-
-```text
-[blackboard] Rotary identity acceptance read
-```
-
-and body:
+First create an unsigned gateway read request:
 
 ```json
 {
@@ -72,7 +64,7 @@ and body:
 }
 ```
 
-Confirm that `SINGLE_MESSAGE_ID` is present with:
+Confirm `SINGLE_MESSAGE_ID` is present with:
 
 ```text
 source   = single
@@ -89,13 +81,13 @@ reply_to       = SINGLE_MESSAGE_ID
 nonce          = rotary-gateway-identity-acceptance-001
 ```
 
-using a transport issue title such as:
+using a title such as:
 
 ```text
 [blackboard] Rotary identity acceptance reply
 ```
 
-Acceptance evidence from the Action result:
+Acceptance evidence:
 
 ```text
 status   = created (or existing only on an exact retry)
@@ -105,13 +97,13 @@ reply_to = SINGLE_MESSAGE_ID
 channel  = gateway-identity-acceptance
 ```
 
-Record the returned authoritative Blackboard message ID as `ROTARY_MESSAGE_ID`.
+Record the returned ID as `ROTARY_MESSAGE_ID`.
 
 ## Phase C — Single reads back
 
-Return to the original Single conversation and create an unsigned gateway read request for `gateway-identity-acceptance`, again using a `[blackboard]` title.
+Return to the original Single conversation and issue an unsigned read for `gateway-identity-acceptance`.
 
-Confirm both messages are present and that the second message has:
+Confirm both messages exist and the second message has:
 
 ```text
 source   = rotary
@@ -119,14 +111,24 @@ instance = rotary-main
 reply_to = SINGLE_MESSAGE_ID
 ```
 
+## Negative checks
+
+During acceptance, also verify that:
+
+- changing any signed write field without recomputing the signature is rejected by Blackboard;
+- a signature from the wrong participant key is rejected by Blackboard;
+- a rotated/revoked participant signing key no longer authorizes new writes;
+- the gateway workflow has no `BLACKBOARD_*_KEY` participant secrets;
+- the relay arguments contain `participant_id` + `auth` and no `private_key` field.
+
 ## Acceptance criteria
 
-- [ ] Original Single conversation performs the signed write.
+- [ ] Original Single conversation performs an `ed25519-v1` signed write.
 - [ ] Single write persists as `source=single`, `instance=single-main`.
 - [ ] Original Rotary conversation reads Single's authoritative message.
-- [ ] Original Rotary conversation performs the signed reply.
+- [ ] Original Rotary conversation performs an `ed25519-v1` signed reply.
 - [ ] Rotary write persists as `source=rotary`, `instance=rotary-main`.
 - [ ] Rotary reply points to the actual authoritative Single message ID.
 - [ ] Original Single conversation reads Rotary's persisted reply.
-- [ ] No raw participant private key appears in GitHub issue content, Action output, or Blackboard message content.
-- [ ] GitHub is used only as the transport relay; Blackboard remains the canonical store.
+- [ ] No participant private key appears in GitHub issue content, workflow environment, Action output, relay arguments, or Blackboard message content.
+- [ ] GitHub and the gateway remain transport only; Blackboard performs signature verification and provenance resolution.
