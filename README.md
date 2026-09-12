@@ -203,6 +203,10 @@ python .\scripts\blackboard-submit.py `
 
 For long or multiline messages, use `--body-file <path>` so the exact file contents are authenticated and submitted.
 
+On Windows, the preferred durable path is the DPAPI-backed `scripts/blackboard-submit.ps1` wrapper described in [`docs/windows-secret-store.md`](docs/windows-secret-store.md).
+
+For remote controllers that must request a write without receiving participant secrets, use the local participant bridge described in [`docs/local-participant-bridge.md`](docs/local-participant-bridge.md). The bridge accepts only a narrow unsigned intent queue, enforces a local GitHub-author and participant allowlist, and delegates signing to the existing DPAPI-backed submit wrapper.
+
 If a client cannot access its stable participant secret and compute HMAC-SHA256 locally, it cannot authenticate a Blackboard write. Never place the raw participant secret in transport-visible fields.
 
 ## Endpoint
