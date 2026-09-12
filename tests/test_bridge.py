@@ -36,7 +36,7 @@ class LocalBridgeTests(unittest.TestCase):
     def test_parse_valid_intent_and_derive_deterministic_nonce(self):
         intent = bridge.parse_intent(61, issue(61)["body"])
         self.assertEqual(intent["kind"], "message")
-        self.assertEqual(intent["reply_to"], None)
+        self.assertIsNone(intent["reply_to"])
         self.assertEqual(intent["nonce"], "bridge-maker-main-61")
 
     def test_reject_unknown_fields(self):
@@ -63,11 +63,10 @@ class LocalBridgeTests(unittest.TestCase):
         self.assertIn("[REDACTED_SECRET]", rendered)
 
     def test_wrong_author_is_rejected_before_credential_or_submit(self):
-        with tempfile.TemporaryDirectory() as root, (
-            mock.patch.object(bridge, "has_bridge_comment", return_value=False),
-            mock.patch.object(bridge, "comment_issue") as comment,
-            mock.patch.object(bridge, "invoke_submitter") as submit,
-        ):
+        with tempfile.TemporaryDirectory() as root, \
+             mock.patch.object(bridge, "has_bridge_comment", return_value=False), \
+             mock.patch.object(bridge, "comment_issue") as comment, \
+             mock.patch.object(bridge, "invoke_submitter") as submit:
             result = bridge.process_issue(
                 issue(author="someone-else"),
                 gh="gh",
@@ -82,11 +81,10 @@ class LocalBridgeTests(unittest.TestCase):
         comment.assert_called_once()
 
     def test_missing_local_credential_is_rejected(self):
-        with tempfile.TemporaryDirectory() as root, (
-            mock.patch.object(bridge, "has_bridge_comment", return_value=False),
-            mock.patch.object(bridge, "comment_issue") as comment,
-            mock.patch.object(bridge, "invoke_submitter") as submit,
-        ):
+        with tempfile.TemporaryDirectory() as root, \
+             mock.patch.object(bridge, "has_bridge_comment", return_value=False), \
+             mock.patch.object(bridge, "comment_issue") as comment, \
+             mock.patch.object(bridge, "invoke_submitter") as submit:
             result = bridge.process_issue(
                 issue(participant_id="new-main"),
                 gh="gh",
@@ -104,15 +102,13 @@ class LocalBridgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             credential_root = pathlib.Path(root)
             (credential_root / "new-main.dpapi").write_text("encrypted", encoding="utf-8")
-            with (
-                mock.patch.object(
-                    bridge,
-                    "invoke_submitter",
-                    return_value="https://github.com/cctsao1008/conversation-blackboard-gateway/issues/999",
-                ) as submit,
-                mock.patch.object(bridge, "comment_issue") as comment,
-                mock.patch.object(bridge, "close_issue") as close,
-            ):
+            with mock.patch.object(
+                bridge,
+                "invoke_submitter",
+                return_value="https://github.com/cctsao1008/conversation-blackboard-gateway/issues/999",
+            ) as submit, mock.patch.object(bridge, "comment_issue") as comment, mock.patch.object(
+                bridge, "close_issue"
+            ) as close:
                 result = bridge.process_issue(
                     issue(participant_id="new-main"),
                     gh="gh",
@@ -137,12 +133,11 @@ class LocalBridgeTests(unittest.TestCase):
                 ["powershell"],
                 stderr="failed hmac-sha256-secret:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
-            with (
-                mock.patch.object(bridge, "invoke_submitter", side_effect=error),
-                mock.patch.object(bridge, "has_bridge_comment", return_value=False),
-                mock.patch.object(bridge, "comment_issue") as comment,
-                mock.patch.object(bridge, "close_issue") as close,
-            ):
+            with mock.patch.object(bridge, "invoke_submitter", side_effect=error), mock.patch.object(
+                bridge, "has_bridge_comment", return_value=False
+            ), mock.patch.object(bridge, "comment_issue") as comment, mock.patch.object(
+                bridge, "close_issue"
+            ) as close:
                 result = bridge.process_issue(
                     issue(),
                     gh="gh",
