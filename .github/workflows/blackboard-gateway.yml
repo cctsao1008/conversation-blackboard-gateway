@@ -14,17 +14,13 @@ concurrency:
 
 jobs:
   relay:
-    if: >-
-      github.event.issue.user.login == github.repository_owner &&
-      startsWith(github.event.issue.title, '[blackboard]')
+    if: startsWith(github.event.issue.title, '[blackboard]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_REPOSITORY: ${{ github.repository }}
-      REPOSITORY_OWNER: ${{ github.repository_owner }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
-      ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
       ISSUE_BODY: ${{ github.event.issue.body }}
       BLACKBOARD_MCP_URL: ${{ vars.BLACKBOARD_MCP_URL }}
 
