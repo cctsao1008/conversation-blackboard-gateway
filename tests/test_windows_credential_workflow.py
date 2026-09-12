@@ -31,19 +31,13 @@ class WindowsCredentialWorkflowTests(unittest.TestCase):
         self.assertNotIn("Write-Output $secret", SUBMIT_SCRIPT)
         self.assertNotIn("Write-Host $secret", SUBMIT_SCRIPT)
 
-    def test_docs_define_seven_participants_and_totp_boundary(self):
-        for participant in (
-            "chatu-main",
-            "cheng-main",
-            "keda-main",
-            "kegui-main",
-            "maker-main",
-            "rotary-main",
-            "single-main",
-        ):
-            self.assertIn(participant, DOC)
-        self.assertIn("TOTP", DOC)
-        self.assertIn("only for `cheng-main`", DOC)
+    def test_docs_define_dynamic_dpapi_capability_boundary(self):
+        self.assertIn("<participant-id>.dpapi", DOC)
+        self.assertIn("not a fixed participant registry", DOC)
+        self.assertIn("does not require changing or reinstalling the local bridge", DOC)
+        self.assertIn("TOTP is a separate Human Web authentication surface", DOC)
+        self.assertIn("local signing capability", DOC)
+        self.assertIn("Blackboard", DOC)
 
 
 if __name__ == "__main__":
