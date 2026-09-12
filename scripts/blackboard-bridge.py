@@ -93,14 +93,21 @@ def sanitize_error(text: str) -> str:
     return text or "local bridge command failed"
 
 
-def gh_json(gh: str, args: list[str]) -> Any:
-    completed = subprocess.run(
+def gh_run(gh: str, args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run GitHub CLI with its documented UTF-8 text output independent of Windows ACP."""
+    return subprocess.run(
         [gh, *args],
         check=True,
         text=True,
+        encoding="utf-8",
+        errors="strict",
         capture_output=True,
         creationflags=windows_no_window_flags(),
     )
+
+
+def gh_json(gh: str, args: list[str]) -> Any:
+    completed = gh_run(gh, args)
     return json.loads(completed.stdout or "null")
 
 
@@ -120,7 +127,9 @@ def list_candidate_issues(gh: str, repository: str) -> list[dict[str, Any]]:
             "number,title,body,author",
         ],
     )
-    return [i for i in issues if isinstance(i.get("title"), str) and i["title"].startswith(TITLE_PREFIX)]
+    if not isinstance(issues, list):
+        raise RuntimeError("GitHub CLI returned an invalid issue list")
+    return [i for i in issues if isinstance(i, dict) and isinstance(i.get("title"), str) and i["title"].startswith(TITLE_PREFIX)]
 
 
 def has_bridge_comment(gh: str, repository: str, issue_number: int) -> bool:
@@ -133,9 +142,9 @@ def has_bridge_comment(gh: str, repository: str, issue_number: int) -> bool:
 
 
 def comment_issue(gh: str, repository: str, issue_number: int, message: str) -> None:
-    subprocess.run(
+    gh_run(
+        gh,
         [
-            gh,
             "issue",
             "comment",
             str(issue_number),
@@ -144,20 +153,13 @@ def comment_issue(gh: str, repository: str, issue_number: int, message: str) -> 
             "--body",
             f"{RESULT_MARKER}\n{message}",
         ],
-        check=True,
-        text=True,
-        capture_output=True,
-        creationflags=windows_no_window_flags(),
     )
 
 
 def close_issue(gh: str, repository: str, issue_number: int) -> None:
-    subprocess.run(
-        [gh, "issue", "close", str(issue_number), "--repo", repository, "--reason", "completed"],
-        check=True,
-        text=True,
-        capture_output=True,
-        creationflags=windows_no_window_flags(),
+    gh_run(
+        gh,
+        ["issue", "close", str(issue_number), "--repo", repository, "--reason", "completed"],
     )
 
 
@@ -297,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
                 submitter=submitter,
             )
         return 0
-    except (OSError, RuntimeError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+    except (OSError, RuntimeError, subprocess.CalledProcessError, UnicodeError, json.JSONDecodeError) as exc:
         print(f"blackboard bridge failed: {sanitize_error(str(exc))}", file=sys.stderr)
         return 1
 
