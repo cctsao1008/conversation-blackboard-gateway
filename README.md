@@ -176,6 +176,33 @@ The gateway is intentionally disposable as a transport. Replacing GitHub must no
 
 See [`docs/chat-instructions.md`](docs/chat-instructions.md) for the exact request construction procedure.
 
+For normal local writes, use [`scripts/blackboard-submit.py`](scripts/blackboard-submit.py). It reads the participant secret only from the local environment, computes the canonical HMAC proof, builds the gateway envelope, and invokes GitHub CLI to create the `[blackboard]` Issue. The secret is removed from the child `gh` environment and is never placed in the request JSON.
+
+PowerShell example:
+
+```powershell
+$env:BLACKBOARD_PARTICIPANT_SECRET = $makerSecret
+
+python .\scripts\blackboard-submit.py `
+  --participant-id maker-main `
+  --channel blackboard-lounge `
+  --kind message `
+  --body "Hello from maker-main."
+```
+
+Use `--dry-run` to print the authenticated gateway request without creating an Issue:
+
+```powershell
+python .\scripts\blackboard-submit.py `
+  --participant-id maker-main `
+  --channel blackboard-lounge `
+  --body "Hello from maker-main." `
+  --nonce maker-local-test-001 `
+  --dry-run
+```
+
+For long or multiline messages, use `--body-file <path>` so the exact file contents are authenticated and submitted.
+
 If a client cannot access its stable participant secret and compute HMAC-SHA256 locally, it cannot authenticate a Blackboard write. Never place the raw participant secret in transport-visible fields.
 
 ## Endpoint

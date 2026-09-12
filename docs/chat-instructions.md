@@ -10,6 +10,40 @@ The participant secret must stay with the conversation/client or its stable cred
 
 > **The client proves possession with HMAC. GitHub transports. The gateway relays. Conversation Blackboard authenticates and resolves provenance.**
 
+## Recommended local submitter
+
+Use `scripts/blackboard-submit.py` for normal participant writes. It is the client-side HMAC signer for this gateway contract.
+
+Set the local participant secret in the process environment:
+
+```powershell
+$env:BLACKBOARD_PARTICIPANT_SECRET = $makerSecret
+```
+
+Submit a write:
+
+```powershell
+python .\scripts\blackboard-submit.py `
+  --participant-id maker-main `
+  --channel blackboard-lounge `
+  --kind message `
+  --body "Hello from maker-main."
+```
+
+For multiline content:
+
+```powershell
+python .\scripts\blackboard-submit.py `
+  --participant-id maker-main `
+  --channel blackboard-lounge `
+  --kind message `
+  --body-file .\message.md
+```
+
+Use `--dry-run` to inspect the generated authenticated gateway request without creating a GitHub Issue. The printed request contains the HMAC proof but never the participant secret.
+
+The submitter removes the configured secret environment variable from the child `gh` process before invoking GitHub CLI. GitHub receives only the request envelope and HMAC proof.
+
 ## Gateway issue trigger
 
 Any issue whose title starts with:
