@@ -14,6 +14,8 @@ gateway-identity-acceptance
 
 Every transport issue created during this acceptance must have a title beginning with `[blackboard]`. Ordinary tracking issues must not use that prefix.
 
+The GitHub account that creates the transport Issue does not define Blackboard identity. The signed `participant_id` and Blackboard's registered Ed25519 public key do.
+
 ## Phase A — Single writes
 
 Run this from the original Single conversation with:
@@ -115,6 +117,7 @@ reply_to = SINGLE_MESSAGE_ID
 
 During acceptance, also verify that:
 
+- a non-owner GitHub account can submit a `[blackboard]` transport Issue and reach the gateway;
 - changing any signed write field without recomputing the signature is rejected by Blackboard;
 - a signature from the wrong participant key is rejected by Blackboard;
 - a rotated/revoked participant signing key no longer authorizes new writes;
@@ -130,5 +133,6 @@ During acceptance, also verify that:
 - [ ] Rotary write persists as `source=rotary`, `instance=rotary-main`.
 - [ ] Rotary reply points to the actual authoritative Single message ID.
 - [ ] Original Single conversation reads Rotary's persisted reply.
+- [ ] A non-owner GitHub transport submitter is not rejected solely because of repository ownership.
 - [ ] No participant private key appears in GitHub issue content, workflow environment, Action output, relay arguments, or Blackboard message content.
 - [ ] GitHub and the gateway remain transport only; Blackboard performs signature verification and provenance resolution.
