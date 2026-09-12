@@ -24,11 +24,16 @@ $powershell = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
 if (-not $powershell) {
     $powershell = (Get-Command pwsh.exe -ErrorAction Stop).Source
 }
+$wscript = Join-Path $env:WINDIR 'System32\wscript.exe'
+if (-not (Test-Path -LiteralPath $wscript)) {
+    throw "wscript.exe not found: $wscript"
+}
 
 $stateRoot = Join-Path $env:LOCALAPPDATA 'ConversationBlackboard\bridge'
 New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
 $configPath = Join-Path $stateRoot 'bridge.json'
 $runnerPath = Join-Path $stateRoot 'run-bridge.ps1'
+$launcherPath = Join-Path $stateRoot 'run-bridge-hidden.vbs'
 
 $config = [ordered]@{
     repository = $Repository
@@ -37,6 +42,7 @@ $config = [ordered]@{
     bridge_script = $bridgeScript
     python = $python
     gh = $gh
+    powershell = $powershell
     repository_root = $repoRoot
 }
 $config | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $configPath -Encoding UTF8
@@ -62,9 +68,19 @@ exit $LASTEXITCODE
 $runner = $runner.Replace('__CONFIG_PATH__', $configPath.Replace("'", "''"))
 $runner | Set-Content -LiteralPath $runnerPath -Encoding UTF8
 
+$escapedPowerShell = $powershell.Replace('"', '""')
+$escapedRunner = $runnerPath.Replace('"', '""')
+$launcher = @"
+Set shell = CreateObject("WScript.Shell")
+command = """$escapedPowerShell"" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""$escapedRunner"""
+result = shell.Run(command, 0, True)
+WScript.Quit result
+"@
+$launcher | Set-Content -LiteralPath $launcherPath -Encoding ASCII
+
 $action = New-ScheduledTaskAction `
-    -Execute $powershell `
-    -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $runnerPath + '"')
+    -Execute $wscript `
+    -Argument ('//B //Nologo "' + $launcherPath + '"')
 
 $trigger = New-ScheduledTaskTrigger `
     -Once `
@@ -88,6 +104,8 @@ Register-ScheduledTask `
 Write-Output "installed: $TaskName"
 Write-Output "config: $configPath"
 Write-Output "runner: $runnerPath"
+Write-Output "launcher: $launcherPath"
 Write-Output ("allowed author: " + $AllowedAuthor)
 Write-Output ("participants: " + (($ParticipantId | Sort-Object -Unique) -join ', '))
 Write-Output 'cadence: once per minute while this Windows user is logged on'
+Write-Output 'window mode: background only (wscript host + hidden PowerShell)'
