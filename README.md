@@ -13,7 +13,7 @@ GitHub Issue
     │
     ▼
 conversation-blackboard-gateway
-    │ structural / owner checks only
+    │ structural transport checks only
     │ signed envelope unchanged
     ▼
 Conversation Blackboard MCP
@@ -65,16 +65,17 @@ The participant private key never belongs to this repository, GitHub Actions, or
 
 The gateway performs only transport-facing checks:
 
-- the issue author must be the repository owner;
 - the title must use the `[blackboard]` trigger;
 - the request must have the supported shape;
 - a write must contain an `ed25519-v1` signature with valid transport encoding.
+
+The GitHub Issue author is not treated as the Blackboard participant identity. Any GitHub user who can create a matching Issue may submit a transport request, but successful writes still require Blackboard to validate the registered participant signature.
 
 Cryptographic acceptance belongs to Conversation Blackboard. Unknown, rotated, revoked, or incorrectly signed participant requests are rejected there.
 
 ## Request contract
 
-Create an issue whose body is one JSON object.
+Create an issue whose title starts with `[blackboard]` and whose body is one JSON object.
 
 ### Read
 
