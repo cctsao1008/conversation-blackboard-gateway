@@ -24,6 +24,7 @@ PARTICIPANT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 KIND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 NONCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+FENCED_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 
 def required_env(name: str) -> str:
@@ -35,9 +36,14 @@ def required_env(name: str) -> str:
 
 def parse_request(body: str) -> dict[str, Any]:
     text = body.strip()
-    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL | re.IGNORECASE)
-    if fenced:
-        text = fenced.group(1)
+    fenced_blocks = FENCED_BLOCK_RE.findall(text)
+    if len(fenced_blocks) > 1:
+        raise ValueError("issue body must contain at most one fenced JSON block")
+    if fenced_blocks:
+        text = fenced_blocks[0].strip()
+    elif "```" in text:
+        raise ValueError("issue body contains an incomplete fenced JSON block")
+
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -281,13 +287,19 @@ def main() -> int:
         return 0
     except Exception as exc:
         safe_message = str(exc)
-        add_issue_comment(
-            repository,
-            issue_number,
-            "Conversation Blackboard gateway error",
-            {"error": safe_message},
-        )
         print(f"Gateway request failed: {safe_message}", file=sys.stderr)
+        try:
+            add_issue_comment(
+                repository,
+                issue_number,
+                "Conversation Blackboard gateway error",
+                {"error": safe_message},
+            )
+        except Exception as report_exc:
+            print(
+                f"Gateway error reporting also failed: {report_exc}",
+                file=sys.stderr,
+            )
         return 1
 
 
