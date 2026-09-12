@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Relay a repository-owner GitHub issue to Conversation Blackboard MCP.
+"""Relay GitHub Issue requests to Conversation Blackboard MCP.
 
 The gateway is a transport adapter, not an identity authority. Signed writes are
 validated structurally and relayed unchanged; Conversation Blackboard verifies
@@ -268,14 +268,8 @@ def close_issue(repository: str, issue_number: int) -> None:
 def main() -> int:
     repository = required_env("GITHUB_REPOSITORY")
     issue_number = int(required_env("ISSUE_NUMBER"))
-    issue_author = required_env("ISSUE_AUTHOR")
-    repository_owner = required_env("REPOSITORY_OWNER")
     issue_body = os.environ.get("ISSUE_BODY", "")
     mcp_url = os.environ.get("BLACKBOARD_MCP_URL", DEFAULT_MCP_URL).strip() or DEFAULT_MCP_URL
-
-    if issue_author.lower() != repository_owner.lower():
-        print("Ignoring issue because the author is not the repository owner.")
-        return 0
 
     try:
         request = parse_request(issue_body)
