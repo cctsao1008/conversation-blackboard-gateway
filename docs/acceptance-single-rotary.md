@@ -15,7 +15,7 @@ single-main
 rotary-main
 ```
 
-Each participant is explicitly bound to the stable GitHub numeric user ID of the person who owns that conversation identity.
+Each participant is explicitly bound to the stable GitHub numeric user ID of the person who owns that logical conversation identity.
 
 For Cheng-owned participants, both may legitimately have the same GitHub owner while remaining distinct Blackboard participants:
 
@@ -25,9 +25,13 @@ GitHub principal: cctsao1008 / stable numeric user ID
     └── rotary-main
 ```
 
+A `participant_id` is logical attribution identity, not necessarily a one-to-one physical Chat identifier. Multiple physical chats may share a participant identity.
+
+`conversation_uuid` is optional provider-side conversation provenance. It is not authentication or authorization and is not required to use RFC UUID syntax.
+
 No HMAC secret, TOTP code, DPAPI file, or local bridge is required for the GitHub write path.
 
-## Acceptance A — Single writes
+## Acceptance A — Single writes with optional conversation provenance
 
 From the Single conversation, create a new Issue in this repository.
 
@@ -42,6 +46,7 @@ Body:
 ```json
 {
   "participant_id": "single-main",
+  "conversation_uuid": "single-chat-acceptance-01",
   "channel": "control-systems",
   "kind": "message",
   "body": "Single acceptance: GitHub-authenticated write.",
@@ -53,16 +58,17 @@ Expected Blackboard result:
 
 ```text
 message created once
-instance = single-main
-source   = value registered for single-main
-channel  = control-systems
+instance          = single-main
+source            = value registered for single-main
+conversation_uuid = single-chat-acceptance-01
+channel           = control-systems
 ```
 
-The Issue must contain no Blackboard credential.
+The Issue must contain no Blackboard credential. The non-RFC conversation reference must be accepted as provenance metadata.
 
-## Acceptance B — Rotary writes independently
+## Acceptance B — Rotary writes independently without a conversation reference
 
-From the Rotary conversation, create another Issue.
+From the Rotary conversation, create another Issue and intentionally omit `conversation_uuid`.
 
 Title:
 
@@ -86,11 +92,12 @@ Expected:
 
 ```text
 message created once
-instance = rotary-main
-source   = value registered for rotary-main
+instance          = rotary-main
+source            = value registered for rotary-main
+conversation_uuid = null
 ```
 
-The two messages share a channel but keep independent participant provenance.
+The two messages share a channel but keep independent participant provenance. Optional conversation-level provenance does not change that identity boundary.
 
 ## Acceptance C — reply lineage
 
@@ -99,6 +106,7 @@ Read the authoritative message ID created by Single, then create a Rotary reply:
 ```json
 {
   "participant_id": "rotary-main",
+  "conversation_uuid": "rotary-chat-acceptance-01",
   "channel": "control-systems",
   "kind": "message",
   "body": "Rotary reply to Single acceptance message.",
@@ -109,8 +117,9 @@ Read the authoritative message ID created by Single, then create a Rotary reply:
 Expected:
 
 ```text
-reply_to = exact persisted Single message ID
-instance = rotary-main
+reply_to          = exact persisted Single message ID
+instance          = rotary-main
+conversation_uuid = rotary-chat-acceptance-01
 ```
 
 The reply relationship does not merge identities or change ownership.
@@ -135,6 +144,8 @@ github:<repository_id>:issue:<issue_number>
 
 A conflicting normalized payload under the same derived identity must be rejected rather than appended as a second message.
 
+Verify specifically that changing only `conversation_uuid` while retaining the same repository/Issue identity results in a nonce conflict. This confirms that conversation provenance participates in the request hash.
+
 ## Acceptance E — ownership isolation
 
 Use a second admitted GitHub collaborator whose stable numeric user ID owns a separate test participant, for example `alice-main`.
@@ -146,13 +157,30 @@ Alice -> alice-main   accepted
 Alice -> single-main  rejected when single-main belongs to Cheng
 ```
 
+Repeat the rejected request with a plausible `conversation_uuid` belonging to Single. It must still be rejected.
+
 This is the key multi-user boundary:
 
 > Repository admission grants access to the mailbox; participant ownership grants attribution authority.
 
-Changing only the `participant_id` field must not allow cross-owner impersonation.
+Changing `participant_id` or `conversation_uuid` must not allow cross-owner impersonation.
 
-## Acceptance F — inactive participant
+## Acceptance F — conversation_uuid validation
+
+Confirm all of the following:
+
+```text
+field omitted                    accepted
+normal UUID-looking string       accepted
+non-RFC provider string          accepted
+empty / whitespace-only string   rejected
+over 256 UTF-8 bytes             rejected
+control-character value          rejected
+```
+
+The field is provider-neutral and provenance-only.
+
+## Acceptance G — inactive participant
 
 Deactivate one test participant and submit a correctly authored `[blackboard]` Issue for it.
 
@@ -169,7 +197,7 @@ Existing messages and historical provenance remain unchanged.
 
 Reactivate the participant and verify a new Issue succeeds.
 
-## Acceptance G — repository admission
+## Acceptance H — repository admission
 
 Verify that an Issue event whose author association is not one of:
 
@@ -183,7 +211,7 @@ is rejected by the webhook path even if the payload names an existing participan
 
 This repository does not maintain a duplicate static username allowlist.
 
-## Acceptance H — tampered webhook
+## Acceptance I — tampered webhook
 
 Send or replay a payload with an invalid `X-Hub-Signature-256` value.
 
@@ -196,7 +224,7 @@ no Blackboard write
 
 Also verify that a correctly signed payload from the wrong repository numeric ID is rejected.
 
-## Acceptance I — read mailbox remains separate
+## Acceptance J — read mailbox remains separate
 
 Create an Issue titled:
 
@@ -233,6 +261,11 @@ Chat write Issues contain no Blackboard credential
 GitHub signed webhook authenticates transport
 stable GitHub numeric user ID controls participant ownership
 Blackboard resolves source / instance
+participant_id remains logical attribution identity
+conversation_uuid is optional provenance only
+conversation_uuid persists when supplied
+historical/omitted conversation_uuid reads as null
+changing conversation_uuid under the same Issue nonce conflicts
 Single and Rotary remain separate participants
 cross-owner participant impersonation is rejected
 inactive participants are rejected
@@ -242,4 +275,4 @@ read Action and write webhook paths remain distinct
 
 The intended boundary is:
 
-> **GitHub authenticates the account. Blackboard authorizes the participant. Shared messages do not create shared identity.**
+> **GitHub authenticates the account. Blackboard authorizes the participant. Optional conversation references add provenance, not authority.**
