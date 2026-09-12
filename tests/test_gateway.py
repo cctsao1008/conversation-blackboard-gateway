@@ -1,5 +1,7 @@
 import base64
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -34,6 +36,26 @@ class GatewayRelayTests(unittest.TestCase):
         }
         request.update(overrides)
         return request
+
+    def test_parse_request_accepts_unfenced_json(self):
+        request = {"operation": "read", "channel": "blackboard-lounge"}
+        self.assertEqual(gateway.parse_request(json.dumps(request)), request)
+
+    def test_parse_request_accepts_one_fenced_json_block(self):
+        body = "Before\n```json\n{\"operation\":\"read\",\"channel\":\"blackboard-lounge\",\"meta\":{\"x\":1}}\n```\nAfter"
+        parsed = gateway.parse_request(body)
+        self.assertEqual(parsed["operation"], "read")
+        self.assertEqual(parsed["channel"], "blackboard-lounge")
+        self.assertEqual(parsed["meta"], {"x": 1})
+
+    def test_parse_request_rejects_multiple_fenced_blocks(self):
+        body = "```json\n{\"operation\":\"read\"}\n```\n```json\n{\"operation\":\"write\"}\n```"
+        with self.assertRaisesRegex(ValueError, "at most one fenced JSON block"):
+            gateway.parse_request(body)
+
+    def test_parse_request_rejects_invalid_json(self):
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
+            gateway.parse_request("{not-json}")
 
     def test_signed_envelope_is_relayed_without_private_key(self):
         request = self.signed_request("single-main")
@@ -99,6 +121,43 @@ class GatewayRelayTests(unittest.TestCase):
         self.assertEqual(tool, "blackboard_read")
         self.assertEqual(arguments["after"], 10)
         self.assertEqual(arguments["limit"], 20)
+
+    def test_read_boundaries_match_blackboard_contract(self):
+        for request in (
+            {"operation": "read", "channel": "control-systems", "after": -1, "limit": 20},
+            {"operation": "read", "channel": "control-systems", "after": 0, "limit": 0},
+            {"operation": "read", "channel": "control-systems", "after": 0, "limit": 201},
+        ):
+            with self.assertRaises(ValueError):
+                gateway.validate_request(request)
+
+    def test_write_boundaries_match_blackboard_contract(self):
+        too_large = self.signed_request(body="x" * (64 * 1024 + 1))
+        with self.assertRaisesRegex(ValueError, "too large"):
+            gateway.validate_request(too_large)
+
+        bad_nonce = self.signed_request(nonce="x" * 129)
+        with self.assertRaisesRegex(ValueError, "valid nonce"):
+            gateway.validate_request(bad_nonce)
+
+    def test_error_comment_failure_does_not_hide_primary_error(self):
+        env = {
+            "GITHUB_REPOSITORY": "cctsao1008/conversation-blackboard-gateway",
+            "ISSUE_NUMBER": "999",
+            "ISSUE_BODY": json.dumps({"operation": "read", "channel": "blackboard-lounge"}),
+        }
+        stderr = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(gateway, "call_blackboard", side_effect=RuntimeError("primary failure")),
+            mock.patch.object(gateway, "add_issue_comment", side_effect=RuntimeError("comment failure")),
+            contextlib.redirect_stderr(stderr),
+        ):
+            self.assertEqual(gateway.main(), 1)
+
+        rendered = stderr.getvalue()
+        self.assertIn("Gateway request failed: primary failure", rendered)
+        self.assertIn("Gateway error reporting also failed: comment failure", rendered)
 
     def test_main_does_not_require_github_author_identity(self):
         request = self.signed_request("keda-main")
