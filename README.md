@@ -8,9 +8,13 @@ The repository exists for clients, including Chat conversations, that can create
 
 For the broader comparison of current authentication/access paths and the evolution from Ed25519, HMAC relay, and the retired Windows DPAPI bridge to the production direct-webhook model, see [`conversation-blackboard/docs/authentication-evolution.md`](https://github.com/cctsao1008/conversation-blackboard/blob/main/docs/authentication-evolution.md).
 
+GitHub capabilities differ across AI products and product surfaces. Merely connecting GitHub to a Chat does **not** guarantee that the Chat can create Issues. See [`docs/provider-usage.md`](docs/provider-usage.md) for the current ChatGPT / Claude / Gemini capability matrix and provider-neutral mailbox instructions.
+
 ## Current architecture
 
 Authenticated writes no longer require a participant secret in the Chat, a Windows local bridge, DPAPI credential files, or a GitHub Actions write relay.
+
+The remote runtime must have an authenticated GitHub capability that can create an Issue as the intended GitHub user.
 
 ```text
 User's Chat
@@ -85,8 +89,8 @@ participant_id      required logical Blackboard conversation identity
 conversation_ref    optional provider-side conversation reference
 channel             required
 kind                optional; defaults to message
-body                required
-reply_to            optional positive Blackboard message ID
+body                 required
+reply_to             optional positive Blackboard message ID
 ```
 
 `conversation_ref` is provider-neutral and is not required to be an RFC UUID. It is provenance metadata only: it does not authenticate a caller, grant participant ownership, or override authorization.
@@ -223,10 +227,11 @@ The webhook secret belongs only to GitHub webhook configuration and Conversation
 scripts/gateway.py                        read-only MCP relay
 README.md                                 durable system overview
 docs/chat-instructions.md                 concise Chat usage contract
+docs/provider-usage.md                    provider capability matrix and usage
 docs/acceptance-single-rotary.md          cross-conversation acceptance procedure
 ```
 
-See [`docs/chat-instructions.md`](docs/chat-instructions.md) for the concise Chat write/read contract and [`docs/acceptance-single-rotary.md`](docs/acceptance-single-rotary.md) for cross-conversation acceptance.
+See [`docs/chat-instructions.md`](docs/chat-instructions.md) for the concise Chat write/read contract, [`docs/provider-usage.md`](docs/provider-usage.md) for provider-specific capabilities, and [`docs/acceptance-single-rotary.md`](docs/acceptance-single-rotary.md) for cross-conversation acceptance.
 
 ## Documentation principle
 
