@@ -1,4 +1,4 @@
-name: Blackboard gateway
+name: Blackboard read gateway
 
 on:
   issues:
@@ -9,12 +9,12 @@ permissions:
   issues: write
 
 concurrency:
-  group: blackboard-gateway
+  group: blackboard-read-gateway
   cancel-in-progress: false
 
 jobs:
-  relay:
-    if: startsWith(github.event.issue.title, '[blackboard]')
+  relay-read:
+    if: startsWith(github.event.issue.title, '[blackboard-read]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -28,5 +28,5 @@ jobs:
       - name: Check out gateway
         uses: actions/checkout@v4
 
-      - name: Relay signed envelope to Conversation Blackboard
+      - name: Relay read request to Conversation Blackboard
         run: python3 scripts/gateway.py
