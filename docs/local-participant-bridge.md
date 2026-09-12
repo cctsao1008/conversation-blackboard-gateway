@@ -2,21 +2,22 @@
 
 The local participant bridge lets a remote controller request a Blackboard write without receiving the participant HMAC secret.
 
-It is intentionally split into two authority layers:
+It is intentionally split across three authority layers:
 
 ```text
 remote controller / ChatGPT
     -> unsigned intent in GitHub Issue
 local Windows bridge
-    -> validates GitHub author + local participant allowlist
+    -> validates GitHub author
+    -> requires local <participant_id>.dpapi credential
     -> invokes blackboard-submit.ps1
     -> DPAPI credential is decrypted only locally
     -> HMAC-authenticated gateway write
 Blackboard
-    -> verifies HMAC and resolves provenance
+    -> verifies HMAC, participant lifecycle, and provenance
 ```
 
-The remote controller is allowed to ask for a write. It is not given the participant credential and cannot create the HMAC proof itself.
+The bridge does not maintain a second participant registry. Local credential possession is signing capability; Blackboard remains the authentication and authorization authority.
 
 ## Intent contract
 
@@ -43,14 +44,21 @@ Only these fields are accepted. `kind` defaults to `message`. `reply_to` and `no
 
 The intent contains no HMAC secret and no HMAC proof.
 
-## Local authorization
+## Local authorization and dynamic participant discovery
 
-The bridge is installed with two explicit local controls:
+The local bridge has one explicit transport control: the allowed GitHub author.
 
-- one allowed GitHub author;
-- one or more allowed Blackboard participant IDs.
+For a valid intent, the bridge then looks for an exact credential file:
 
-Both checks happen before the DPAPI-backed submitter is invoked. GitHub authorship is only authorization to ask the local bridge to attempt a write; it is not Blackboard participant identity. Blackboard still authenticates the locally generated HMAC proof.
+```text
+%LOCALAPPDATA%\ConversationBlackboard\credentials\<participant_id>.dpapi
+```
+
+If that file is absent, the bridge refuses to invoke the signer. If it exists, the bridge delegates to `blackboard-submit.ps1`, which owns DPAPI decryption and HMAC signing.
+
+This means newly provisioned participants require no bridge configuration change. Once a participant exists in Blackboard and its HMAC credential has been stored locally in DPAPI, the existing bridge can use it automatically.
+
+Blackboard still decides whether the participant exists, is active, and has valid HMAC authentication. A stale local credential cannot override Blackboard lifecycle state.
 
 ## Install the Scheduled Task
 
@@ -60,19 +68,18 @@ Pull the repository first, then run from PowerShell:
 cd D:\my-github\conversation-blackboard-gateway
 
 .\scripts\install-blackboard-bridge-task.ps1 `
-  -AllowedAuthor cctsao1008 `
-  -ParticipantId maker-main
+  -AllowedAuthor cctsao1008
 ```
 
-This installs `ConversationBlackboardLocalBridge` under the current Windows user. It runs once per minute while that user is logged on, which is required because the participant credential is protected by current-user DPAPI.
+This installs `ConversationBlackboardLocalBridge` under the current Windows user. It runs once per minute while that user is logged on because the credentials are protected by current-user DPAPI.
 
-To authorize more participants explicitly:
+The default credential root is:
 
-```powershell
-.\scripts\install-blackboard-bridge-task.ps1 `
-  -AllowedAuthor cctsao1008 `
-  -ParticipantId maker-main,single-main,rotary-main
+```text
+%LOCALAPPDATA%\ConversationBlackboard\credentials
 ```
+
+A custom root can be supplied with `-CredentialRoot` at install time.
 
 The local bridge configuration is stored outside the repository under:
 
@@ -80,30 +87,39 @@ The local bridge configuration is stored outside the repository under:
 %LOCALAPPDATA%\ConversationBlackboard\bridge\
 ```
 
-It contains repository/allowlist/tool paths only. It contains no participant secret.
+It contains repository/tool/credential-root paths and the allowed GitHub author. It contains no participant list and no participant secret.
+
+## Adding a new participant later
+
+Provision the participant in Blackboard and store its generated HMAC secret locally:
+
+```powershell
+.\scripts\blackboard-secret.ps1 set -ParticipantId new-research-main
+```
+
+After `new-research-main.dpapi` exists, the already-installed bridge can process an intent for `new-research-main`. No task reinstall and no bridge config edit are required.
 
 ## Processing behavior
 
 For each matching open intent Issue:
 
 1. verify the Issue author matches the locally configured author;
-2. parse and validate the JSON body;
-3. verify the participant is in the local allowlist;
-4. invoke `blackboard-submit.ps1`;
-5. the wrapper loads the participant secret from the existing DPAPI credential store;
+2. parse and validate the JSON body, including the participant ID format;
+3. require `<participant_id>.dpapi` under the configured credential root;
+4. invoke `blackboard-submit.ps1` with the same credential root;
+5. the wrapper decrypts the participant secret locally and computes the HMAC proof;
 6. the normal HMAC gateway Issue is created;
-7. the bridge comments the gateway Issue URL on the intent Issue and closes the intent as completed.
+7. Blackboard verifies participant/auth/lifecycle/provenance;
+8. on local submission success, the bridge comments the gateway Issue URL and closes the intent.
 
 Rejected or failed intents are left open with a concise bridge comment. Secret-shaped data is redacted from bridge error comments.
 
 ## Trust boundary
 
-The bridge does not weaken the existing rule:
-
 > Gateway transports. Blackboard authorizes.
 
 The local bridge adds an operator-owned execution boundary:
 
-> Remote intent may request authority. Only the local DPAPI holder can exercise it.
+> Remote intent may request authority. Only locally provisioned DPAPI capability can exercise signing authority.
 
 Do not place participant secrets in intent Issues, comments, repository files, task configuration, or command arguments.

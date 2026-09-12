@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Process remote Blackboard write intents through the local DPAPI-backed signer.
 
-This bridge never reads or receives participant HMAC secrets itself. It validates a
-GitHub Issue intent, then invokes blackboard-submit.ps1, which owns local DPAPI
-credential access and HMAC submission.
+The bridge never reads participant HMAC secrets. It validates the remote intent and
+requires a matching local DPAPI credential before delegating to blackboard-submit.ps1.
+Blackboard remains the final participant authentication and lifecycle authority.
 """
 
 from __future__ import annotations
@@ -31,6 +31,19 @@ def windows_no_window_flags() -> int:
     if os.name != "nt":
         return 0
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def default_credential_root() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        raise RuntimeError("LOCALAPPDATA is not available; specify --credential-root")
+    return Path(local_app_data) / "ConversationBlackboard" / "credentials"
+
+
+def credential_path(credential_root: Path, participant_id: str) -> Path:
+    if not PARTICIPANT_ID_RE.fullmatch(participant_id):
+        raise ValueError("invalid participant_id")
+    return credential_root / f"{participant_id}.dpapi"
 
 
 def parse_intent(issue_number: int, raw_body: str) -> dict[str, Any]:
@@ -94,7 +107,6 @@ def sanitize_error(text: str) -> str:
 
 
 def gh_run(gh: str, args: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run GitHub CLI with its documented UTF-8 text output independent of Windows ACP."""
     return subprocess.run(
         [gh, *args],
         check=True,
@@ -114,18 +126,7 @@ def gh_json(gh: str, args: list[str]) -> Any:
 def list_candidate_issues(gh: str, repository: str) -> list[dict[str, Any]]:
     issues = gh_json(
         gh,
-        [
-            "issue",
-            "list",
-            "--repo",
-            repository,
-            "--state",
-            "open",
-            "--limit",
-            "100",
-            "--json",
-            "number,title,body,author",
-        ],
+        ["issue", "list", "--repo", repository, "--state", "open", "--limit", "100", "--json", "number,title,body,author"],
     )
     if not isinstance(issues, list):
         raise RuntimeError("GitHub CLI returned an invalid issue list")
@@ -133,34 +134,17 @@ def list_candidate_issues(gh: str, repository: str) -> list[dict[str, Any]]:
 
 
 def has_bridge_comment(gh: str, repository: str, issue_number: int) -> bool:
-    data = gh_json(
-        gh,
-        ["issue", "view", str(issue_number), "--repo", repository, "--json", "comments"],
-    )
+    data = gh_json(gh, ["issue", "view", str(issue_number), "--repo", repository, "--json", "comments"])
     comments = data.get("comments", []) if isinstance(data, dict) else []
     return any(RESULT_MARKER in str(comment.get("body", "")) for comment in comments)
 
 
 def comment_issue(gh: str, repository: str, issue_number: int, message: str) -> None:
-    gh_run(
-        gh,
-        [
-            "issue",
-            "comment",
-            str(issue_number),
-            "--repo",
-            repository,
-            "--body",
-            f"{RESULT_MARKER}\n{message}",
-        ],
-    )
+    gh_run(gh, ["issue", "comment", str(issue_number), "--repo", repository, "--body", f"{RESULT_MARKER}\n{message}"])
 
 
 def close_issue(gh: str, repository: str, issue_number: int) -> None:
-    gh_run(
-        gh,
-        ["issue", "close", str(issue_number), "--repo", repository, "--reason", "completed"],
-    )
+    gh_run(gh, ["issue", "close", str(issue_number), "--repo", repository, "--reason", "completed"])
 
 
 def find_powershell() -> str:
@@ -175,6 +159,7 @@ def invoke_submitter(
     powershell: str,
     submitter: Path,
     repository: str,
+    credential_root: Path,
     intent: dict[str, Any],
 ) -> str:
     argv = [
@@ -199,16 +184,12 @@ def invoke_submitter(
         intent["nonce"],
         "-Repository",
         repository,
+        "-CredentialRoot",
+        str(credential_root),
     ]
     if intent["reply_to"] is not None:
         argv.extend(["-ReplyTo", str(intent["reply_to"])])
-    completed = subprocess.run(
-        argv,
-        check=True,
-        text=True,
-        capture_output=True,
-        creationflags=windows_no_window_flags(),
-    )
+    completed = subprocess.run(argv, check=True, text=True, encoding="utf-8", errors="replace", capture_output=True, creationflags=windows_no_window_flags())
     output = completed.stdout.strip()
     if not output:
         raise RuntimeError("local submitter returned no result")
@@ -221,7 +202,7 @@ def process_issue(
     gh: str,
     repository: str,
     allowed_author: str,
-    allowed_participants: set[str],
+    credential_root: Path,
     powershell: str,
     submitter: Path,
 ) -> str:
@@ -241,13 +222,14 @@ def process_issue(
             comment_issue(gh, repository, issue_number, f"Rejected: {sanitize_error(str(exc))}")
         return "rejected-intent"
 
-    if intent["participant_id"] not in allowed_participants:
+    local_credential = credential_path(credential_root, intent["participant_id"])
+    if not local_credential.is_file():
         if not has_bridge_comment(gh, repository, issue_number):
-            comment_issue(gh, repository, issue_number, "Rejected: participant is not allowed by the local bridge.")
-        return "rejected-participant"
+            comment_issue(gh, repository, issue_number, "Rejected: no local DPAPI credential exists for this participant.")
+        return "rejected-no-credential"
 
     try:
-        gateway_url = invoke_submitter(powershell, submitter, repository, intent)
+        gateway_url = invoke_submitter(powershell, submitter, repository, credential_root, intent)
     except (RuntimeError, subprocess.CalledProcessError) as exc:
         detail = str(exc)
         if isinstance(exc, subprocess.CalledProcessError):
@@ -256,12 +238,7 @@ def process_issue(
             comment_issue(gh, repository, issue_number, f"Local submit failed: {sanitize_error(detail)}")
         return "submit-failed"
 
-    comment_issue(
-        gh,
-        repository,
-        issue_number,
-        f"Submitted through the local participant signer: {gateway_url}",
-    )
+    comment_issue(gh, repository, issue_number, f"Submitted through the local participant signer: {gateway_url}")
     close_issue(gh, repository, issue_number)
     return "submitted"
 
@@ -270,7 +247,7 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Process local Blackboard write intents from GitHub Issues.")
     p.add_argument("--repository", default="cctsao1008/conversation-blackboard-gateway")
     p.add_argument("--allowed-author", required=True)
-    p.add_argument("--participant", action="append", dest="participants", required=True)
+    p.add_argument("--credential-root", type=Path)
     p.add_argument("--submitter", type=Path)
     return p
 
@@ -285,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
         powershell = find_powershell()
         script_dir = Path(__file__).resolve().parent
         submitter = args.submitter or (script_dir / "blackboard-submit.ps1")
+        credential_root = args.credential_root or default_credential_root()
         if not submitter.is_file():
             raise RuntimeError(f"submitter not found: {submitter}")
         issues = list_candidate_issues(gh, args.repository)
@@ -294,12 +272,12 @@ def main(argv: list[str] | None = None) -> int:
                 gh=gh,
                 repository=args.repository,
                 allowed_author=args.allowed_author,
-                allowed_participants=set(args.participants),
+                credential_root=credential_root,
                 powershell=powershell,
                 submitter=submitter,
             )
         return 0
-    except (OSError, RuntimeError, subprocess.CalledProcessError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError, UnicodeError, json.JSONDecodeError) as exc:
         print(f"blackboard bridge failed: {sanitize_error(str(exc))}", file=sys.stderr)
         return 1
 

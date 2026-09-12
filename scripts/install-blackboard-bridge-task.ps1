@@ -2,11 +2,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$AllowedAuthor,
 
-    [Parameter(Mandatory = $true)]
-    [string[]]$ParticipantId,
-
     [string]$Repository = 'cctsao1008/conversation-blackboard-gateway',
-    [string]$TaskName = 'ConversationBlackboardLocalBridge'
+    [string]$TaskName = 'ConversationBlackboardLocalBridge',
+    [string]$CredentialRoot = $(Join-Path $env:LOCALAPPDATA 'ConversationBlackboard\credentials')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,6 +14,9 @@ $repoRoot = Split-Path -Parent $scriptDir
 $bridgeScript = Join-Path $scriptDir 'blackboard-bridge.py'
 if (-not (Test-Path -LiteralPath $bridgeScript)) {
     throw "bridge script not found: $bridgeScript"
+}
+if (-not $CredentialRoot) {
+    throw 'LOCALAPPDATA is not available; specify -CredentialRoot explicitly.'
 }
 
 $python = (Get-Command python -ErrorAction Stop).Source
@@ -38,7 +39,7 @@ $launcherPath = Join-Path $stateRoot 'run-bridge-hidden.vbs'
 $config = [ordered]@{
     repository = $Repository
     allowed_author = $AllowedAuthor
-    participants = @($ParticipantId)
+    credential_root = $CredentialRoot
     bridge_script = $bridgeScript
     python = $python
     gh = $gh
@@ -56,11 +57,9 @@ $env:PATH = (Split-Path -Parent $config.gh) + ';' + $env:PATH
 $args = @(
     $config.bridge_script,
     '--repository', $config.repository,
-    '--allowed-author', $config.allowed_author
+    '--allowed-author', $config.allowed_author,
+    '--credential-root', $config.credential_root
 )
-foreach ($participant in $config.participants) {
-    $args += @('--participant', [string]$participant)
-}
 
 & $config.python @args
 exit $LASTEXITCODE
@@ -106,6 +105,7 @@ Write-Output "config: $configPath"
 Write-Output "runner: $runnerPath"
 Write-Output "launcher: $launcherPath"
 Write-Output ("allowed author: " + $AllowedAuthor)
-Write-Output ("participants: " + (($ParticipantId | Sort-Object -Unique) -join ', '))
+Write-Output ("credential root: " + $CredentialRoot)
+Write-Output 'participant discovery: dynamic from local DPAPI credentials'
 Write-Output 'cadence: once per minute while this Windows user is logged on'
 Write-Output 'window mode: background only (wscript host + hidden PowerShell)'
