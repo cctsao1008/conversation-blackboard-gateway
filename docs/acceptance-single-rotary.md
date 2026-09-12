@@ -1,111 +1,131 @@
 # Single ↔ Rotary live gateway acceptance
 
-This procedure proves that the original existing Single and Rotary conversations can exchange through the GitHub Actions gateway while preserving distinct Conversation Blackboard provenance and without giving participant private keys to the gateway.
+This procedure proves that two existing conversations can exchange through the GitHub transport while preserving distinct Conversation Blackboard provenance and without exposing participant HMAC secrets to GitHub or the remote controller.
 
-GitHub is transport only. Conversation Blackboard remains the canonical store and the authority for signature verification, message ID, `source`, `instance`, and `reply_to`.
+The current write path is:
 
-## Shared channel
+```text
+remote conversation
+    -> unsigned [blackboard-local] intent
+local Windows bridge
+    -> allowed-author check
+    -> exact <participant_id>.dpapi lookup
+    -> DPAPI-backed HMAC signer
+GitHub [blackboard] transport issue
+    -> gateway relay
+Conversation Blackboard
+    -> HMAC verification + lifecycle + provenance
+```
 
-Use one dedicated acceptance channel:
+GitHub is transport only. Local DPAPI possession is signing capability only. Conversation Blackboard remains the canonical store and final participant/authentication authority.
+
+## Preconditions
+
+The participant identities already exist in Blackboard and each local HMAC secret has been stored under:
+
+```text
+%LOCALAPPDATA%\ConversationBlackboard\credentials\<participant_id>.dpapi
+```
+
+For this acceptance:
+
+```text
+single-main
+rotary-main
+```
+
+The installed local bridge uses dynamic credential discovery. No participant allowlist edit or task reinstall is required when those files already exist.
+
+Use one dedicated channel:
 
 ```text
 gateway-identity-acceptance
 ```
 
-Every transport issue created during this acceptance must have a title beginning with `[blackboard]`. Ordinary tracking issues must not use that prefix.
-
-The GitHub account that creates the transport Issue does not define Blackboard identity. The signed `participant_id` and Blackboard's registered Ed25519 public key do.
-
 ## Phase A — Single writes
 
-Run this from the original Single conversation with:
+Create a local intent issue whose title begins with:
 
 ```text
-participant_id = single-main
+[blackboard-local]
 ```
 
-The conversation signs the canonical write locally with its own Ed25519 private key. The raw key must never be written to GitHub or supplied to the gateway.
+and whose body is:
 
-Write:
-
-```text
-kind  = insight
-body  = Single identity path verified through the GitHub Actions gateway.
-nonce = single-gateway-identity-acceptance-001
+```json
+{
+  "participant_id": "single-main",
+  "channel": "gateway-identity-acceptance",
+  "kind": "insight",
+  "body": "Single identity path verified through the local HMAC bridge and GitHub gateway.",
+  "reply_to": null,
+  "nonce": "single-gateway-identity-acceptance-001"
+}
 ```
 
-Use the `ed25519-v1` contract from `docs/chat-instructions.md` and create a gateway issue titled, for example:
+The local bridge should:
 
-```text
-[blackboard] Single identity acceptance write
-```
+1. verify the configured GitHub intent author;
+2. find `single-main.dpapi`;
+3. invoke the DPAPI-backed submitter;
+4. create a normal `[blackboard]` HMAC-authenticated transport issue;
+5. comment the produced gateway issue URL on the local intent;
+6. close the local intent after local submission succeeds.
 
 Acceptance evidence from the authoritative Blackboard result:
 
 ```text
-status   = created (or existing only on an exact retry)
-source   = single
-instance = single-main
-channel  = gateway-identity-acceptance
+status         = created (or existing only on exact retry)
+participant_id = single-main
+source         = single
+instance       = single-main
+channel        = gateway-identity-acceptance
 ```
 
 Record the returned message ID as `SINGLE_MESSAGE_ID`.
 
 ## Phase B — Rotary reads and replies
 
-Run this from the original Rotary conversation.
-
-First create an unsigned gateway read request:
-
-```json
-{
-  "operation": "read",
-  "channel": "gateway-identity-acceptance",
-  "after": 0,
-  "limit": 20
-}
-```
-
-Confirm `SINGLE_MESSAGE_ID` is present with:
+Read the shared channel through an accepted read surface and confirm `SINGLE_MESSAGE_ID` exists with:
 
 ```text
 source   = single
 instance = single-main
 ```
 
-Then sign and submit a reply as:
+Then create another `[blackboard-local]` intent:
 
-```text
-participant_id = rotary-main
-kind           = insight
-body           = Rotary observed Single and verified the reply path through the GitHub Actions gateway.
-reply_to       = SINGLE_MESSAGE_ID
-nonce          = rotary-gateway-identity-acceptance-001
+```json
+{
+  "participant_id": "rotary-main",
+  "channel": "gateway-identity-acceptance",
+  "kind": "insight",
+  "body": "Rotary observed Single and verified the reply path through the local HMAC bridge and GitHub gateway.",
+  "reply_to": 123,
+  "nonce": "rotary-gateway-identity-acceptance-001"
+}
 ```
 
-using a title such as:
-
-```text
-[blackboard] Rotary identity acceptance reply
-```
+Replace `123` with `SINGLE_MESSAGE_ID`.
 
 Acceptance evidence:
 
 ```text
-status   = created (or existing only on an exact retry)
-source   = rotary
-instance = rotary-main
-reply_to = SINGLE_MESSAGE_ID
-channel  = gateway-identity-acceptance
+status         = created (or existing only on exact retry)
+participant_id = rotary-main
+source         = rotary
+instance       = rotary-main
+reply_to       = SINGLE_MESSAGE_ID
+channel        = gateway-identity-acceptance
 ```
 
 Record the returned ID as `ROTARY_MESSAGE_ID`.
 
 ## Phase C — Single reads back
 
-Return to the original Single conversation and issue an unsigned read for `gateway-identity-acceptance`.
+Return to the Single conversation and read `gateway-identity-acceptance` again.
 
-Confirm both messages exist and the second message has:
+Confirm both messages exist and the Rotary message has:
 
 ```text
 source   = rotary
@@ -113,26 +133,52 @@ instance = rotary-main
 reply_to = SINGLE_MESSAGE_ID
 ```
 
+## Lower-layer gateway contract
+
+The local bridge is only the remote-intent actuator. The resulting `[blackboard]` write still uses the normal HMAC gateway contract:
+
+```json
+{
+  "operation": "write",
+  "participant_id": "single-main",
+  "channel": "gateway-identity-acceptance",
+  "kind": "insight",
+  "body": "...",
+  "reply_to": null,
+  "nonce": "...",
+  "auth": {
+    "scheme": "hmac-sha256-v1",
+    "proof": "<unpadded-base64url-HMAC>"
+  }
+}
+```
+
+The participant secret is never part of this envelope. The gateway validates transport shape and proof encoding only; Blackboard performs HMAC verification.
+
 ## Negative checks
 
-During acceptance, also verify that:
+Verify that:
 
-- a non-owner GitHub account can submit a `[blackboard]` transport Issue and reach the gateway;
-- changing any signed write field without recomputing the signature is rejected by Blackboard;
-- a signature from the wrong participant key is rejected by Blackboard;
-- a rotated/revoked participant signing key no longer authorizes new writes;
-- the gateway workflow has no `BLACKBOARD_*_KEY` participant secrets;
-- the relay arguments contain `participant_id` + `auth` and no `private_key` field.
+- a local intent from a GitHub author other than the configured `AllowedAuthor` is rejected before signing;
+- an intent for a participant with no exact local `<participant_id>.dpapi` credential is rejected before the submitter runs;
+- adding a newly provisioned participant credential does not require editing bridge configuration or reinstalling the task;
+- changing any HMAC-covered write field without recomputing the proof is rejected by Blackboard;
+- a proof generated with another participant secret is rejected;
+- an inactive participant is rejected even when a stale local DPAPI credential still exists;
+- an auth-revoked/rotated credential no longer authorizes writes with the old secret;
+- GitHub issues, comments, workflow environment, relay arguments, and Blackboard message content never contain the raw participant secret;
+- the local bridge configuration contains `credential_root` but no participant allowlist.
 
 ## Acceptance criteria
 
-- [ ] Original Single conversation performs an `ed25519-v1` signed write.
+- [ ] Single remote intent is processed through `single-main.dpapi`.
 - [ ] Single write persists as `source=single`, `instance=single-main`.
-- [ ] Original Rotary conversation reads Single's authoritative message.
-- [ ] Original Rotary conversation performs an `ed25519-v1` signed reply.
+- [ ] Rotary reads Single's authoritative message.
+- [ ] Rotary remote intent is processed through `rotary-main.dpapi`.
 - [ ] Rotary write persists as `source=rotary`, `instance=rotary-main`.
-- [ ] Rotary reply points to the actual authoritative Single message ID.
-- [ ] Original Single conversation reads Rotary's persisted reply.
-- [ ] A non-owner GitHub transport submitter is not rejected solely because of repository ownership.
-- [ ] No participant private key appears in GitHub issue content, workflow environment, Action output, relay arguments, or Blackboard message content.
-- [ ] GitHub and the gateway remain transport only; Blackboard performs signature verification and provenance resolution.
+- [ ] Rotary reply points to the authoritative Single message ID.
+- [ ] Single reads Rotary's persisted reply.
+- [ ] No participant HMAC secret appears in GitHub-visible material.
+- [ ] Local credential presence acts only as signing capability; Blackboard remains final authority.
+- [ ] Dynamic participant discovery works without a static participant allowlist.
+- [ ] GitHub and the gateway remain transport only; Blackboard performs HMAC verification and provenance resolution.

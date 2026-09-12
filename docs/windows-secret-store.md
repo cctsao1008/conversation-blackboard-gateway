@@ -2,7 +2,7 @@
 
 This is the normal Windows workflow for Conversation Blackboard participant HMAC credentials.
 
-The Blackboard registry remains the authority for participant identity and credential validity. This local workflow only stores each participant's already-issued HMAC secret for use by the local signer.
+Conversation Blackboard remains the authority for participant identity, lifecycle, credential validity, and provenance. This local workflow only stores already-issued participant HMAC secrets for use by a local signer.
 
 ## Storage model
 
@@ -14,23 +14,27 @@ The Blackboard registry remains the authority for participant identity and crede
 
 The stored text is the output of PowerShell `ConvertFrom-SecureString` without an explicit key. On Windows this uses DPAPI current-user protection. The raw `hmac-sha256-secret:...` value is not written to disk.
 
-The encrypted files are deliberately outside the repository. Do not copy them into Git, GitHub Issues, Blackboard messages, shared folders, or documentation.
+The encrypted files are deliberately outside the repository. Do not copy them into Git, GitHub Issues, Blackboard messages, shared folders, screenshots, logs, or documentation.
 
-## Durable participants
+## Dynamic credential set
 
-The production participant set is:
+The local credential directory is not a fixed participant registry.
+
+Each `.dpapi` file represents only this Windows account's local ability to sign as that participant. The set may grow or shrink independently of bridge configuration.
 
 ```text
-chatu-main
-cheng-main
-keda-main
-kegui-main
-maker-main
-rotary-main
-single-main
+credentials\
+    maker-main.dpapi
+    single-main.dpapi
+    rotary-main.dpapi
+    new-research-main.dpapi
 ```
 
-All seven use participant-level HMAC authentication for authenticated writes. TOTP is separate and is configured only for `cheng-main` for human/browser access.
+Adding `new-research-main.dpapi` does not require changing or reinstalling the local bridge. The bridge discovers the exact credential dynamically from `intent.participant_id`.
+
+Credential presence is not Blackboard authorization. Blackboard still rejects unknown, inactive, revoked, rotated, or incorrectly authenticated participants.
+
+TOTP is a separate Human Web authentication surface. A participant may have HMAC auth, TOTP, both, or neither according to its configured role and use case.
 
 ## One-time credential storage
 
@@ -72,9 +76,9 @@ Remove a local credential without changing the Blackboard registry:
 .\scripts\blackboard-secret.ps1 remove -ParticipantId maker-main
 ```
 
-Registry revocation and local-file removal are separate operations. Removing the DPAPI file only removes this Windows user's local ability to sign with that credential.
+Registry auth revocation and local-file removal are separate operations. Removing the DPAPI file removes only this Windows account's local signing capability.
 
-## Normal write workflow
+## Normal local write workflow
 
 Use the PowerShell wrapper rather than manually exporting the participant secret:
 
@@ -106,13 +110,37 @@ For multiline content:
   -BodyFile .\message.md
 ```
 
-The wrapper decrypts only the selected participant credential, places it in `BLACKBOARD_PARTICIPANT_SECRET` only for the Python submitter invocation, and restores/removes the environment variable in a `finally` block. The Python submitter removes that secret from the `gh` child-process environment. GitHub receives only the request fields and HMAC proof.
+The wrapper decrypts only the selected participant credential, places it in `BLACKBOARD_PARTICIPANT_SECRET` only for the Python submitter invocation, and restores/removes the environment variable in a `finally` block. The Python submitter removes that secret from the `gh` child-process environment. GitHub receives only request fields and the HMAC proof.
+
+## Remote-intent bridge workflow
+
+A remote controller that cannot access local DPAPI directly can create an unsigned `[blackboard-local]` intent. The installed bridge verifies the allowed GitHub author and then checks for:
+
+```text
+<credential-root>\<participant_id>.dpapi
+```
+
+If the exact credential exists, the bridge delegates to `blackboard-submit.ps1`. It never decrypts or handles the raw secret itself.
+
+Install the bridge once with:
+
+```powershell
+.\scripts\install-blackboard-bridge-task.ps1 `
+  -AllowedAuthor cctsao1008
+```
+
+There is no static participant allowlist. New participants require Blackboard provisioning plus local DPAPI storage only; they do not require a bridge config edit or Scheduled Task reinstall.
+
+See [`local-participant-bridge.md`](local-participant-bridge.md).
 
 ## Trust boundary
 
 ```text
+Blackboard participant registry
+        | issues/revokes participant HMAC authority
+        v
 DPAPI-protected local credential
-        |
+        | local signing capability only
         v
 PowerShell wrapper
         | temporary process environment
@@ -125,9 +153,9 @@ GitHub Issue
 Gateway relay
         v
 Conversation Blackboard
-        | verify participant registry credential
+        | verify participant auth + lifecycle
         v
 persisted provenance
 ```
 
-The local credential store is a client convenience and custody mechanism. It does not become an authentication authority.
+The local credential store is a client custody mechanism. It does not become an authentication authority or a second participant registry.
