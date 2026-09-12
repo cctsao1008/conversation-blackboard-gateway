@@ -64,7 +64,7 @@ $runner | Set-Content -LiteralPath $runnerPath -Encoding UTF8
 
 $action = New-ScheduledTaskAction `
     -Execute $powershell `
-    -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $runnerPath + '"')
+    -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $runnerPath + '"')
 
 $trigger = New-ScheduledTaskTrigger `
     -Once `
