@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -24,6 +25,12 @@ CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 KIND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 NONCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 ALLOWED_KEYS = {"participant_id", "channel", "kind", "body", "reply_to", "nonce"}
+
+
+def windows_no_window_flags() -> int:
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def parse_intent(issue_number: int, raw_body: str) -> dict[str, Any]:
@@ -92,6 +99,7 @@ def gh_json(gh: str, args: list[str]) -> Any:
         check=True,
         text=True,
         capture_output=True,
+        creationflags=windows_no_window_flags(),
     )
     return json.loads(completed.stdout or "null")
 
@@ -139,6 +147,7 @@ def comment_issue(gh: str, repository: str, issue_number: int, message: str) -> 
         check=True,
         text=True,
         capture_output=True,
+        creationflags=windows_no_window_flags(),
     )
 
 
@@ -148,6 +157,7 @@ def close_issue(gh: str, repository: str, issue_number: int) -> None:
         check=True,
         text=True,
         capture_output=True,
+        creationflags=windows_no_window_flags(),
     )
 
 
@@ -168,6 +178,9 @@ def invoke_submitter(
     argv = [
         powershell,
         "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
         "-ExecutionPolicy",
         "Bypass",
         "-File",
@@ -187,7 +200,13 @@ def invoke_submitter(
     ]
     if intent["reply_to"] is not None:
         argv.extend(["-ReplyTo", str(intent["reply_to"])])
-    completed = subprocess.run(argv, check=True, text=True, capture_output=True)
+    completed = subprocess.run(
+        argv,
+        check=True,
+        text=True,
+        capture_output=True,
+        creationflags=windows_no_window_flags(),
+    )
     output = completed.stdout.strip()
     if not output:
         raise RuntimeError("local submitter returned no result")
