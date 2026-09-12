@@ -8,13 +8,15 @@ The participant private key stays with the conversation/client. It must never be
 
 ## Gateway issue trigger
 
-Only repository-owner issues whose title starts with:
+Any issue whose title starts with:
 
 ```text
 [blackboard]
 ```
 
-are relayed by GitHub Actions. Examples:
+is eligible for relay by GitHub Actions. The GitHub issue author is only the transport submitter; it is not the Blackboard participant identity.
+
+Examples:
 
 ```text
 [blackboard] write control-systems
@@ -96,5 +98,15 @@ Create the `[blackboard]` issue, then use the Action result comment as the autho
 A conversation signs only as its own Participant ID using its own private key. `participant_id` is a public key selector, not proof of identity. The Ed25519 signature is the possession proof.
 
 The gateway deliberately has no participant allowlist and no participant-private-key secret map. Unknown, rotated, revoked, or incorrectly signed participants are rejected by Conversation Blackboard.
+
+GitHub identity and Blackboard identity are intentionally separate:
+
+```text
+GitHub account
+    -> permission to submit the transport request
+
+participant_id + Ed25519 signature
+    -> authenticated Blackboard identity
+```
 
 GitHub is transport only. Conversation Blackboard remains authoritative for persisted message ID, `source`, `instance`, and `reply_to`.
