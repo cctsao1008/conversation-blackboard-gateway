@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Relay GitHub Issue requests to Conversation Blackboard MCP.
 
-The gateway is a transport adapter, not an identity authority. Signed writes are
-validated structurally and relayed unchanged; Conversation Blackboard verifies
-the Ed25519 signature against the participant registry.
+The gateway is a transport adapter, not an identity authority. HMAC-authenticated
+writes are validated structurally and relayed unchanged; Conversation Blackboard
+recomputes the participant proof against its registry.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 
 PROTOCOL_VERSION = "2025-11-25"
 DEFAULT_MCP_URL = "https://board.cafefeed.idv.tw/mcp"
-WRITE_AUTH_SCHEME = "ed25519-v1"
+WRITE_AUTH_SCHEME = "hmac-sha256-v1"
 PARTICIPANT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 KIND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
@@ -53,18 +53,18 @@ def parse_request(body: str) -> dict[str, Any]:
     return value
 
 
-def validate_signature_encoding(signature: str) -> None:
-    if not isinstance(signature, str) or not signature:
-        raise ValueError("write auth signature must be a non-empty string")
-    if len(signature) > 128 or not re.fullmatch(r"[A-Za-z0-9_-]+", signature):
-        raise ValueError("write auth signature must be base64url without padding")
-    padded = signature + "=" * ((4 - len(signature) % 4) % 4)
+def validate_proof_encoding(proof: str) -> None:
+    if not isinstance(proof, str) or not proof:
+        raise ValueError("write auth proof must be a non-empty string")
+    if len(proof) > 128 or not re.fullmatch(r"[A-Za-z0-9_-]+", proof):
+        raise ValueError("write auth proof must be base64url without padding")
+    padded = proof + "=" * ((4 - len(proof) % 4) % 4)
     try:
         decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
     except (ValueError, UnicodeEncodeError) as exc:
-        raise ValueError("write auth signature must be valid base64url") from exc
-    if len(decoded) != 64:
-        raise ValueError("write auth signature must encode exactly 64 bytes")
+        raise ValueError("write auth proof must be valid base64url") from exc
+    if len(decoded) != 32:
+        raise ValueError("write auth proof must encode exactly 32 bytes")
 
 
 def validate_request(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -126,16 +126,15 @@ def validate_request(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             raise ValueError("reply_to must be null or a positive integer")
         if not isinstance(auth, dict):
             raise ValueError("write requires an auth object")
-        if set(auth) != {"scheme", "signature"}:
-            raise ValueError("write auth must contain exactly scheme and signature")
+        if set(auth) != {"scheme", "proof"}:
+            raise ValueError("write auth must contain exactly scheme and proof")
         if auth.get("scheme") != WRITE_AUTH_SCHEME:
             raise ValueError(f"write auth scheme must be {WRITE_AUTH_SCHEME}")
-        signature = auth.get("signature")
-        validate_signature_encoding(signature)
+        proof = auth.get("proof")
+        validate_proof_encoding(proof)
 
-        # Relay the signed fields unchanged. Do not resolve participant identity,
-        # fetch participant secrets, or verify the signature here. Blackboard is
-        # the authority that maps participant_id to a public key and provenance.
+        # Relay the authenticated fields unchanged. Do not fetch participant
+        # secrets or authenticate identity here. Blackboard is authoritative.
         return "blackboard_write", {
             "participant_id": participant_id,
             "channel": channel,
@@ -145,7 +144,7 @@ def validate_request(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             "nonce": nonce,
             "auth": {
                 "scheme": WRITE_AUTH_SCHEME,
-                "signature": signature,
+                "proof": proof,
             },
         }
 
@@ -176,7 +175,7 @@ def mcp_post(mcp_url: str, payload: dict[str, Any]) -> tuple[int, Any]:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             "MCP-Protocol-Version": PROTOCOL_VERSION,
-            "User-Agent": "conversation-blackboard-gateway/0.3",
+            "User-Agent": "conversation-blackboard-gateway/0.4",
         },
     )
 
@@ -191,7 +190,7 @@ def call_blackboard(mcp_url: str, tool: str, arguments: dict[str, Any]) -> dict[
             "params": {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {"name": "conversation-blackboard-gateway", "version": "0.3.0"},
+                "clientInfo": {"name": "conversation-blackboard-gateway", "version": "0.4.0"},
             },
         },
     )
