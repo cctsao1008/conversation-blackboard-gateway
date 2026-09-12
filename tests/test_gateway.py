@@ -100,40 +100,55 @@ class GatewayRelayTests(unittest.TestCase):
         self.assertEqual(arguments["after"], 10)
         self.assertEqual(arguments["limit"], 20)
 
-    def test_issue_author_does_not_control_relay(self):
+    def test_main_does_not_require_github_author_identity(self):
         request = self.signed_request("keda-main")
-        for issue_author in ("cctsao1008", "kedatsao-dev"):
-            env = {
-                "GITHUB_REPOSITORY": "cctsao1008/conversation-blackboard-gateway",
-                "ISSUE_NUMBER": "40",
-                "ISSUE_AUTHOR": issue_author,
-                "ISSUE_BODY": json.dumps(request),
-            }
-            with (
-                mock.patch.dict(os.environ, env, clear=True),
-                mock.patch.object(
-                    gateway,
-                    "call_blackboard",
-                    return_value={"status": "created", "id": 123},
-                ) as call_blackboard,
-                mock.patch.object(gateway, "add_issue_comment") as add_issue_comment,
-                mock.patch.object(gateway, "close_issue") as close_issue,
-            ):
-                self.assertEqual(gateway.main(), 0)
-                call_blackboard.assert_called_once()
-                tool, arguments = call_blackboard.call_args.args[1:]
-                self.assertEqual(tool, "blackboard_write")
-                self.assertEqual(arguments["participant_id"], "keda-main")
-                add_issue_comment.assert_called_once()
-                close_issue.assert_called_once()
+        env = {
+            "GITHUB_REPOSITORY": "cctsao1008/conversation-blackboard-gateway",
+            "ISSUE_NUMBER": "40",
+            "ISSUE_BODY": json.dumps(request),
+        }
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(
+                gateway,
+                "call_blackboard",
+                return_value={"status": "created", "id": 123},
+            ) as call_blackboard,
+            mock.patch.object(gateway, "add_issue_comment") as add_issue_comment,
+            mock.patch.object(gateway, "close_issue") as close_issue,
+        ):
+            self.assertEqual(gateway.main(), 0)
+            call_blackboard.assert_called_once()
+            tool, arguments = call_blackboard.call_args.args[1:]
+            self.assertEqual(tool, "blackboard_write")
+            self.assertEqual(arguments["participant_id"], "keda-main")
+            add_issue_comment.assert_called_once()
+            close_issue.assert_called_once()
 
-    def test_workflow_filters_by_title_not_repository_owner(self):
+    def test_workflow_filters_by_title_without_author_identity_gate(self):
         workflow = (ROOT / ".github" / "workflows" / "blackboard-gateway.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("startsWith(github.event.issue.title, '[blackboard]')", workflow)
+        self.assertNotIn("github.event.issue.user.login", workflow)
         self.assertNotIn("github.repository_owner", workflow)
+        self.assertNotIn("ISSUE_AUTHOR", workflow)
         self.assertNotIn("REPOSITORY_OWNER", workflow)
+
+    def test_current_docs_do_not_describe_owner_only_gateway_access(self):
+        paths = [
+            ROOT / "README.md",
+            ROOT / "docs" / "chat-instructions.md",
+        ]
+        forbidden = (
+            "Only repository-owner",
+            "only repository-owner",
+            "structural / owner checks",
+        )
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            for phrase in forbidden:
+                self.assertNotIn(phrase, text, msg=f"{phrase!r} found in {path}")
 
 
 if __name__ == "__main__":
