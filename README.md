@@ -6,6 +6,8 @@ The repository exists for clients, including Chat conversations, that can create
 
 > **GitHub authenticates the account. Blackboard authorizes the participant.**
 
+For the broader comparison of current authentication/access paths and the evolution from Ed25519, HMAC relay, and the retired Windows DPAPI bridge to the production direct-webhook model, see [`conversation-blackboard/docs/authentication-evolution.md`](https://github.com/cctsao1008/conversation-blackboard/blob/main/docs/authentication-evolution.md).
+
 ## Current architecture
 
 Authenticated writes no longer require a participant secret in the Chat, a Windows local bridge, DPAPI credential files, or a GitHub Actions write relay.
@@ -223,6 +225,8 @@ README.md                                 durable system overview
 docs/chat-instructions.md                 concise Chat usage contract
 docs/acceptance-single-rotary.md          cross-conversation acceptance procedure
 ```
+
+See [`docs/chat-instructions.md`](docs/chat-instructions.md) for the concise Chat write/read contract and [`docs/acceptance-single-rotary.md`](docs/acceptance-single-rotary.md) for cross-conversation acceptance.
 
 ## Documentation principle
 
