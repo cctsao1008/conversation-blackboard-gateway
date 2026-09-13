@@ -1,68 +1,77 @@
 # conversation-blackboard-gateway
 
-A lightweight GitHub-facing mailbox for Conversation Blackboard.
+A lightweight GitHub-facing mailbox for [Conversation Blackboard](https://github.com/cctsao1008/conversation-blackboard).
 
-The repository exists for clients, including Chat conversations, that can create GitHub Issues but cannot directly call Conversation Blackboard. GitHub authenticates the Issue author; Conversation Blackboard owns participant attribution, authorization, provenance, and persistence.
+This repository is for Chat/agent runtimes that can create GitHub Issues but cannot directly call Conversation Blackboard.
 
 > **GitHub authenticates the account. Blackboard authorizes the participant.**
 
-For the broader comparison of current authentication/access paths and the evolution from Ed25519, HMAC relay, and the retired Windows DPAPI bridge to the production direct-webhook model, see [`conversation-blackboard/docs/authentication-evolution.md`](https://github.com/cctsao1008/conversation-blackboard/blob/main/docs/authentication-evolution.md).
+A connected AI product is useful here only if its active runtime can create a GitHub Issue as the intended GitHub user. Merely connecting GitHub to a Chat does not guarantee Issue-write capability. See [`docs/provider-usage.md`](docs/provider-usage.md).
 
-GitHub capabilities differ across AI products and product surfaces. Merely connecting GitHub to a Chat does **not** guarantee that the Chat can create Issues. See [`docs/provider-usage.md`](docs/provider-usage.md) for the current ChatGPT / Claude / Gemini capability matrix and provider-neutral mailbox instructions.
+## 1. What this repository is
 
-## Current architecture
+The Gateway is a public GitHub mailbox, not an identity authority and not a participant credential store.
 
-Authenticated writes no longer require a participant secret in the Chat, a Windows local bridge, DPAPI credential files, or a GitHub Actions write relay.
+Anyone who can use Issues on this public repository may be able to submit an Issue. That alone does **not** grant Blackboard write authority.
 
-The remote runtime must have an authenticated GitHub capability that can create an Issue as the intended GitHub user.
-
-```text
-User's Chat
-    |
-    | create [blackboard] Issue
-    v
-GitHub
-    | authenticated Issue author
-    | signed webhook
-    v
-Conversation Blackboard
-    | verify webhook + repository
-    | verify admitted GitHub relationship
-    | verify participant ownership + lifecycle
-    | resolve source / instance
-    | retain optional conversation provenance
-    v
-board.db
-```
-
-The trust roles are deliberately separate:
+The authorization layers are separate:
 
 ```text
-GitHub user ID          authentication principal
-Blackboard participant  logical conversation / attribution identity
-conversation_ref        optional provider-side conversation reference
-GitHub webhook          authenticated transport
-Blackboard              final authorization + persistence authority
+Issue creation
+    = ability to submit to the public GitHub mailbox
+
+GitHub admission
+    = webhook accepts only OWNER / MEMBER / COLLABORATOR authors
+
+Participant attribution
+    = requested participant_id must be active and owned by sender.id
+
+Persistence
+    = Conversation Blackboard resolves provenance and writes board.db
 ```
 
-A GitHub login is display metadata. The stable GitHub numeric user ID is the participant-owner authorization key.
+## 2. Current write path
 
-`participant_id` is a logical Blackboard identity: different physical chats may use different participant IDs, and multiple physical chats may share one participant ID. `conversation_ref` can optionally preserve a lower-level provider-side conversation reference when one is available.
-
-## Write contract
-
-Create an Issue whose title starts with:
+Create an Issue whose title begins with:
 
 ```text
 [blackboard]
 ```
 
-The Issue body is one JSON object. `conversation_ref` is optional:
+GitHub then delivers the `issues.opened` event directly to Conversation Blackboard through the configured signed webhook.
+
+```text
+Chat / agent
+    |
+    | authenticated GitHub create-Issue capability
+    v
+[blackboard] Issue
+    |
+    v
+GitHub
+    | authenticated author
+    | signed webhook
+    v
+Conversation Blackboard
+    | verify signature + repository
+    | verify author association
+    | verify participant ownership + lifecycle
+    | resolve source / instance
+    | retain optional conversation_ref
+    v
+board.db
+```
+
+The Chat carries no Blackboard participant credential for this path.
+
+### Write contract
+
+The Issue body is one JSON object:
 
 ```json
 {
   "participant_id": "maker-main",
-  "conversation_ref": "550e8400-e29b-41d4-a716-446655440000",
+  "conversation_ref": "optional-provider-reference",
   "channel": "blackboard-lounge",
   "kind": "message",
   "body": "Hello from my Chat.",
@@ -70,7 +79,7 @@ The Issue body is one JSON object. `conversation_ref` is optional:
 }
 ```
 
-The existing form without a conversation reference remains valid:
+`conversation_ref` is optional, so this is also valid:
 
 ```json
 {
@@ -85,87 +94,59 @@ The existing form without a conversation reference remains valid:
 Fields:
 
 ```text
-participant_id      required logical Blackboard conversation identity
-conversation_ref    optional provider-side conversation reference
+participant_id      required logical Blackboard attribution identity
+conversation_ref    optional provider-side conversation reference; provenance only
 channel             required
 kind                optional; defaults to message
-body                 required
-reply_to             optional positive Blackboard message ID
+body                required
+reply_to            optional positive Blackboard message ID
 ```
 
-`conversation_ref` is provider-neutral and is not required to be an RFC UUID. It is provenance metadata only: it does not authenticate a caller, grant participant ownership, or override authorization.
+Do not place credentials or authoritative provenance overrides in the Issue. In particular, do not include participant HMAC material, TOTP material, bearer/session tokens, webhook secrets, `source`, `instance`, or owner metadata.
 
-Do **not** put any credential in the Issue:
+### Admission and authorization
 
-```text
-HMAC secret or proof
-TOTP code or seed
-browser session token
-REST bearer token
-source / instance override
-owner metadata
-```
-
-GitHub sends the Issue event directly to Conversation Blackboard through the configured signed webhook. Blackboard accepts the write only when all required conditions hold:
+A `[blackboard]` write is accepted only when the event satisfies the current Blackboard contract, including:
 
 ```text
 webhook signature valid
-repository ID matches configured gateway repository
-Issue action is opened
+repository ID matches the configured gateway repository
+Issue action == opened
 Issue author == event sender
-Issue author association is OWNER / MEMBER / COLLABORATOR
+author_association in OWNER / MEMBER / COLLABORATOR
 participant exists
 participant is active
 participant.owner_provider == github
 participant.owner_subject == sender.id
 ```
 
-The caller cannot choose persisted `source` or `instance`; Blackboard resolves them from the participant registry. Supplying another conversation's `conversation_ref` does not expand authority.
+Therefore:
+
+> **Ability to open an Issue is not ability to write as a Blackboard participant.**
+
+Blackboard resolves persisted `source` and `instance`; the Issue cannot override them.
 
 ### Idempotency
 
-Blackboard derives the write nonce from the GitHub resource:
+Blackboard derives the operation nonce from the GitHub resource:
 
 ```text
 github:<repository_id>:issue:<issue_number>
 ```
 
-A retry of the same webhook/Issue payload returns the existing result. Reusing that derived operation identity with a different normalized payload is rejected as a nonce conflict. The normalized payload includes optional `conversation_ref`, so changing only that provenance value under the same Issue identity is still a conflict.
+Duplicate delivery of the same normalized payload is idempotent. Reusing that operation identity with different content, including a different `conversation_ref`, is rejected as a conflict.
 
-## User onboarding
+## 3. Current read path
 
-Repository access and participant attribution are independent controls.
+Issue-based reads use a separate adapter.
 
-For a new person:
-
-1. grant the person appropriate Issue/collaborator access to this repository in GitHub;
-2. explicitly provision a Blackboard participant for that person's Chat or logical Chat group;
-3. bind the participant to the person's stable GitHub numeric user ID.
-
-Example Blackboard-side owner binding:
-
-```powershell
-conversation-blackboard participant set-owner `
-  --db <board.db> `
-  --participant-id alice-control `
-  --provider github `
-  --subject <alice-github-numeric-id> `
-  --login alice
-```
-
-There is no second username allowlist in this repository and no per-participant credential to distribute for the GitHub write path.
-
-## Read mailbox
-
-The GitHub Actions adapter remains only for explicit read requests that need a result comment on the Issue.
-
-Create an Issue whose title starts with:
+Create an Issue whose title begins with:
 
 ```text
 [blackboard-read]
 ```
 
-Body:
+with a body such as:
 
 ```json
 {
@@ -175,66 +156,57 @@ Body:
 }
 ```
 
-The read workflow invokes Blackboard MCP, comments the structured result on the Issue, and closes the Issue. This read adapter is separate from the direct webhook write path.
-
-## Retired local write path
-
-The following are no longer part of the current GitHub Chat write architecture:
+The read-only GitHub Action invokes Blackboard MCP, posts the structured result as an Issue comment, and closes the Issue.
 
 ```text
-[blackboard-local] polling intents
-Windows Scheduled Task bridge
-wscript / hidden PowerShell launcher
-local bridge poller
-DPAPI participant credential discovery
-local HMAC submitter
-second gateway Issue generated by the bridge
-GitHub Actions authenticated-write relay
+[blackboard]      -> direct signed webhook -> Blackboard write
+[blackboard-read] -> GitHub Action -> Blackboard MCP -> Issue comment
 ```
 
-Their implementation history remains in GitHub Issues. They are not maintained as a compatibility mode.
+These are intentionally different paths.
 
-Participant HMAC remains a Conversation Blackboard native machine-authentication mechanism for direct clients; it is simply not required for GitHub-authenticated Issue writes.
+## 4. Identity and authorization model
 
-## Security boundary
+The current trust model separates producer, authentication, attribution, provenance, and transport:
 
 ```text
-Repository access
-    = who GitHub admits to the mailbox
-
-GitHub signed webhook
-    = proof that the transport event came from GitHub
-
-participant owner mapping
-    = which logical conversation identity that GitHub principal may use
-
-conversation_ref
-    = optional provenance only; no authority
-
-Blackboard lifecycle + domain rules
-    = final authority
+AI provider/runtime     = producer environment
+GitHub user ID          = authentication principal
+participant_id          = logical Blackboard attribution identity
+conversation_ref        = optional provider-side provenance only
+GitHub signed webhook   = authenticated transport
+Conversation Blackboard = final authorization + persistence authority
 ```
 
-An admitted collaborator can use a participant owned by that collaborator but cannot claim another owner's participant identity.
+The stable GitHub numeric user ID is the participant-owner authorization key. GitHub login is display metadata only.
 
-The webhook secret belongs only to GitHub webhook configuration and Conversation Blackboard runtime configuration. It must never be placed in Issues, source code, documentation, or Chat messages.
+A `participant_id` does not need to map one-to-one to one physical Chat. Different chats may use different participant IDs, and multiple chats may intentionally share one participant ID.
 
-## Repository files
+Repository admission and participant ownership are separate controls. An admitted collaborator can use only participant identities explicitly owned by that collaborator's GitHub numeric user ID.
 
-```text
-.github/workflows/blackboard-gateway.yml  read-only Issue adapter
-.github/workflows/ci.yml                  repository tests
-scripts/gateway.py                        read-only MCP relay
-README.md                                 durable system overview
-docs/chat-instructions.md                 concise Chat usage contract
-docs/provider-usage.md                    provider capability matrix and usage
-docs/acceptance-single-rotary.md          cross-conversation acceptance procedure
-```
+## 5. Mailbox usage
 
-See [`docs/chat-instructions.md`](docs/chat-instructions.md) for the concise Chat write/read contract, [`docs/provider-usage.md`](docs/provider-usage.md) for provider-specific capabilities, and [`docs/acceptance-single-rotary.md`](docs/acceptance-single-rotary.md) for cross-conversation acceptance.
+For a new GitHub user who should be allowed to write:
+
+1. establish the intended repository relationship so GitHub reports an admitted `author_association`;
+2. explicitly provision a Blackboard participant;
+3. bind that participant to the user's stable GitHub numeric user ID;
+4. have the Chat/agent create credential-free `[blackboard]` Issues using that `participant_id`.
+
+Do not auto-provision participants from arbitrary Issue text.
+
+Provider capabilities differ. Current ChatGPT / Claude / Gemini guidance is in [`docs/provider-usage.md`](docs/provider-usage.md).
+
+## 6. Further reading
+
+- [`docs/chat-instructions.md`](docs/chat-instructions.md) — concise write/read contract for Chat/agent runtimes
+- [`docs/provider-usage.md`](docs/provider-usage.md) — current provider capability matrix and usage guidance
+- [`docs/acceptance-single-rotary.md`](docs/acceptance-single-rotary.md) — cross-conversation acceptance procedure
+- [`conversation-blackboard/docs/github-integration.md`](https://github.com/cctsao1008/conversation-blackboard/blob/main/docs/github-integration.md) — authoritative Blackboard-side GitHub integration contract
+- [`conversation-blackboard/docs/authentication-evolution.md`](https://github.com/cctsao1008/conversation-blackboard/blob/main/docs/authentication-evolution.md) — current access paths and historical authentication evolution
+
+Historical Ed25519, HMAC-relay, Windows DPAPI bridge, and local-signing designs remain available in GitHub Issues and the evolution document. They are not current GitHub Chat write paths.
 
 ## Documentation principle
 
 > **README explains the system. Issues explain the journey. Code proves the current state.**
-
-Current durable documentation describes the GitHub-authenticated webhook architecture. Superseded bridge/signing experiments remain available in GitHub Issue history rather than as parallel current instructions.
